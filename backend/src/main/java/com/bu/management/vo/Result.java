@@ -52,6 +52,13 @@ public class Result<T> {
     }
 
     /**
+     * 成功响应（无数据）
+     */
+    public static Result<Void> success() {
+        return new Result<>(200, "success", null, LocalDateTime.now());
+    }
+
+    /**
      * 失败响应
      */
     public static <T> Result<T> error(Integer code, String message) {
