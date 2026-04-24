@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api } from '@/utils/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -9,484 +8,250 @@ interface BusinessLine {
   name: string
   description?: string
   status: number
+  createdAt?: string
+  updatedAt?: string
 }
 
-interface Project {
-  id: number
-  businessLineId: number
-  parentId: number | null
-  level: number
-  name: string
-  fullPath: string
-  code: string
-  managerId: number | null
-  status: number
-  children?: Project[]
-}
-
-interface OrgRow {
-  id: string | number
-  type: 'business-line' | 'project'
-  businessLineId: number | null
-  parentId: number | null
-  name: string
-  description?: string
-  code?: string
-  managerId?: number | null
-  status: number
-  level: number
-  children?: OrgRow[]
-}
-
-const tableData = ref<OrgRow[]>([])
+const businessLines = ref<BusinessLine[]>([])
 const loading = ref(false)
-const allUsers = ref<any[]>([])
-const allBusinessLines = ref<BusinessLine[]>([])
+const dialogVisible = ref(false)
+const isEdit = ref(false)
+const formRef = ref()
 
-// Business line dialog
-const blDialogVisible = ref(false)
-const isEditBL = ref(false)
-const blForm = ref({ id: undefined as number | undefined, name: '', description: '', status: 1 })
-const blFormRef = ref()
-const blRules = {
+const form = ref({
+  id: undefined as number | undefined,
+  name: '',
+  description: '',
+  status: 1
+})
+
+const rules = {
   name: [{ required: true, message: '请输入业务线名称', trigger: 'blur' }]
 }
 
-// Project dialog
-const projectDialogVisible = ref(false)
-const isEditProject = ref(false)
-const isGlobalProjectMode = ref(false)
-const projectForm = ref({
-  id: undefined as number | undefined,
-  businessLineId: undefined as number | undefined,
-  parentId: undefined as number | null | undefined,
-  name: '',
-  code: '',
-  managerId: undefined as number | undefined,
-  status: 1
-})
-const projectFormRef = ref()
-const projectRules = {
-  businessLineId: [{ required: true, message: '请选择业务线', trigger: 'change' }],
-  name: [{ required: true, message: '请输入项目名称', trigger: 'blur' }],
-  code: [{ required: true, message: '请输入项目编码', trigger: 'blur' }]
-}
-
-// For parent project dropdown in project form
-const projectsOfCurrentBL = ref<Project[]>([])
-
-const buildTree = (businessLines: BusinessLine[], projects: Project[]): OrgRow[] => {
-  const projId = (realId: number) => `proj-${realId}`
-  return businessLines.map(bl => {
-    // Find direct projects (parentId === null, i.e., main projects) for this BL
-    const mainProjects = projects.filter(p => p.businessLineId === bl.id && p.parentId === null)
-    const blChildren = mainProjects.map((proj: Project): OrgRow => {
-      const subProjects = projects.filter(p => p.parentId === proj.id).map((cp: Project): OrgRow => ({
-        id: projId(cp.id),
-        type: 'project' as const,
-        businessLineId: cp.businessLineId,
-        parentId: cp.parentId,
-        name: cp.name,
-        code: cp.code,
-        managerId: cp.managerId,
-        status: cp.status,
-        level: cp.level,
-        children: []
-      }))
-      return {
-        id: projId(proj.id),
-        type: 'project' as const,
-        businessLineId: proj.businessLineId,
-        parentId: proj.parentId,
-        name: proj.name,
-        description: '',
-        code: proj.code,
-        managerId: proj.managerId,
-        status: proj.status,
-        level: proj.level,
-        children: subProjects
-      }
-    })
-    return {
-      id: `bl-${bl.id}`,
-      type: 'business-line' as const,
-      businessLineId: bl.id,
-      parentId: null,
-      name: bl.name,
-      description: bl.description,
-      status: bl.status,
-      level: 0,
-      children: blChildren
-    }
-  })
-}
-
-const getProjectRealId = (rowId: string): number => {
-  return parseInt(rowId.replace('proj-', ''), 10)
-}
-
-const getBLineId = (rowId: string): number => {
-  return parseInt(rowId.replace('bl-', ''), 10)
-}
-
-const extractRecords = (resp: any): any[] => {
-  if (Array.isArray(resp)) return resp
-  if (resp?.records) return resp.records
-  if (resp?.data?.records) return resp.data.records
+const extractRecords = (payload: any): BusinessLine[] => {
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.records)) return payload.records
+  if (Array.isArray(payload?.data?.records)) return payload.data.records
+  if (Array.isArray(payload?.data)) return payload.data
   return []
+}
+
+const totalActiveLines = computed(() => {
+  return businessLines.value.filter(item => item.status === 1).length
+})
+
+const formatDateTime = (value?: string) => {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
 }
 
 const loadData = async () => {
   loading.value = true
   try {
-    const [blResp, projResp, usersResp] = await Promise.all([
-      api.getBusinessLines({ size: 999 }),
-      api.getProjects({ size: 999 }),
-      api.getUsers({ page: 1, size: 100 })
-    ])
-    const blData = extractRecords(blResp)
-    allBusinessLines.value = blData
-    const projData = extractRecords(projResp)
-    tableData.value = buildTree(blData, projData)
-    allUsers.value = extractRecords(usersResp)
+    const data = await api.getBusinessLines({ size: 999 })
+    businessLines.value = extractRecords(data)
   } catch (error) {
-    console.error('加载数据失败:', error)
-    ElMessage.error('加载数据失败')
+    console.error('加载业务线失败:', error)
+    ElMessage.error('加载业务线失败')
   } finally {
     loading.value = false
   }
 }
 
-const getManagerName = (managerId: number | null | undefined) => {
-  if (managerId == null) return '—'
-  const user = allUsers.value.find(u => u.id === managerId)
-  return user?.realName ?? '—'
-}
-
-const STATUS_LABELS: Record<number, string> = { 1: '启用', 0: '禁用' }
-const PROJECT_STATUS_LABELS: Record<number, string> = { 1: '进行中', 0: '已结束' }
-const STATUS_TAG_TYPE: Record<number, string> = { 1: 'success', 0: 'info' }
-
-// ---- Business Line CRUD ----
-const openAddBL = () => {
-  blForm.value = { id: undefined, name: '', description: '', status: 1 }
-  isEditBL.value = false
-  blDialogVisible.value = true
-}
-const handleEditBL = (row: OrgRow) => {
-  blForm.value = { id: getBLineId(row.id as string), name: row.name, description: row.description || '', status: row.status }
-  isEditBL.value = true
-  blDialogVisible.value = true
-}
-const handleDeleteBL = async (row: OrgRow) => {
-  try {
-    const hasProjects = row.children && row.children.length > 0
-    if (hasProjects) {
-      ElMessage.error('该业务线存在关联项目，无法删除')
-      return
-    }
-    await ElMessageBox.confirm(`确定要删除业务线「${row.name}」吗？`, '提示', { type: 'warning' })
-    await api.deleteBusinessLine(getBLineId(row.id as string))
-    ElMessage.success('删除成功')
-    loadData()
-  } catch (error) {
-    if (error !== 'cancel') ElMessage.error('删除失败')
-  }
-}
-const submitBL = async () => {
-  if (!blFormRef.value) return
-  await blFormRef.value.validate(async (valid: boolean) => {
-    if (!valid) return
-    try {
-      if (isEditBL.value) {
-        await api.updateBusinessLine(getBLineId(blForm.value.id as any as string), {
-          name: blForm.value.name,
-          description: blForm.value.description,
-          status: blForm.value.status
-        })
-        ElMessage.success('更新成功')
-      } else {
-        await api.createBusinessLine({
-          name: blForm.value.name,
-          description: blForm.value.description,
-          status: blForm.value.status
-        })
-        ElMessage.success('创建成功')
-      }
-      blDialogVisible.value = false
-      loadData()
-    } catch (error) {
-      ElMessage.error(isEditBL.value ? '更新失败' : '创建失败')
-    }
-  })
-}
-
-// ---- Project CRUD ----
-const openAddProjectFromHeader = async () => {
-  projectForm.value = {
+const openAdd = () => {
+  form.value = {
     id: undefined,
-    businessLineId: undefined,
-    parentId: undefined,
     name: '',
-    code: '',
-    managerId: undefined,
+    description: '',
     status: 1
   }
-  isEditProject.value = false
-  isGlobalProjectMode.value = true
-  try {
-    const projResp = await api.getProjects({ size: 999 })
-    const allProj = extractRecords(projResp)
-    projectsOfCurrentBL.value = allProj.filter((p: Project) => p.parentId == null)
-  } catch (e) {
-    console.error('[openAddProjectFromHeader] error:', e)
-    projectsOfCurrentBL.value = []
-  }
-  projectDialogVisible.value = true
+  isEdit.value = false
+  dialogVisible.value = true
 }
-const openAddProject = async (parentBL: OrgRow, parentProject?: OrgRow) => {
-  projectForm.value = {
-    id: undefined,
-    businessLineId: parentBL.businessLineId ?? undefined,
-    parentId: parentProject ? getProjectRealId(parentProject.id as string) : undefined,
-    name: '',
-    code: '',
-    managerId: undefined,
-    status: 1
-  }
-  isEditProject.value = false
-  isGlobalProjectMode.value = false
-  // Load editable projects for parent dropdown (only main projects of this BL)
-  try {
-    const projResp = await api.getProjects({ size: 999 })
-    const allProj = extractRecords(projResp)
-    projectsOfCurrentBL.value = allProj.filter((p: Project) =>
-      p.businessLineId === parentBL.businessLineId && p.parentId == null
-    )
-  } catch (e) {
-    console.error('[openAddProject] error:', e)
-    projectsOfCurrentBL.value = []
-  }
-  projectDialogVisible.value = true
-}
-const handleEditProject = async (row: OrgRow) => {
-  const realId = getProjectRealId(row.id as string)
-  projectForm.value = {
-    id: realId,
-    businessLineId: row.businessLineId ?? undefined,
-    parentId: row.parentId ?? undefined,
+
+const handleEdit = (row: BusinessLine) => {
+  form.value = {
+    id: row.id,
     name: row.name,
-    code: row.code || '',
-    managerId: row.managerId ?? undefined,
+    description: row.description || '',
     status: row.status
   }
-  isEditProject.value = true
-  try {
-    const projResp = await api.getProjects({ size: 999 })
-    const allProj = extractRecords(projResp)
-    projectsOfCurrentBL.value = (allProj as Project[]).filter((p: Project) =>
-      p.businessLineId === row.businessLineId && (p.parentId == null) && p.id !== realId
-    )
-  } catch {
-    projectsOfCurrentBL.value = []
-  }
-  projectDialogVisible.value = true
+  isEdit.value = true
+  dialogVisible.value = true
 }
-const handleDeleteProject = async (row: OrgRow) => {
+
+const handleDelete = async (row: BusinessLine) => {
   try {
-    if (row.children && row.children.length > 0) {
-      ElMessage.error('该项目存在子项目，无法删除')
-      return
-    }
-    await ElMessageBox.confirm(`确定要删除项目「${row.name}」吗？`, '提示', { type: 'warning' })
-    await api.deleteProject(getProjectRealId(row.id as string))
+    await ElMessageBox.confirm(`确定要删除业务线「${row.name}」吗？`, '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await api.deleteBusinessLine(row.id)
     ElMessage.success('删除成功')
-    loadData()
+    await loadData()
   } catch (error) {
-    if (error !== 'cancel') ElMessage.error('删除失败')
+    if (error !== 'cancel') {
+      ElMessage.error('删除失败')
+    }
   }
 }
-const submitProject = async () => {
-  if (!projectFormRef.value) return
-  await projectFormRef.value.validate(async (valid: boolean) => {
+
+const handleSubmit = async () => {
+  if (!formRef.value) return
+
+  await formRef.value.validate(async (valid: boolean) => {
     if (!valid) return
+
     try {
-      const data = {
-        businessLineId: projectForm.value.businessLineId!,
-        parentId: projectForm.value.parentId ?? null,
-        name: projectForm.value.name,
-        code: projectForm.value.code,
-        managerId: projectForm.value.managerId ?? null,
-        status: projectForm.value.status
+      const payload = {
+        name: form.value.name,
+        description: form.value.description || null,
+        status: form.value.status
       }
-      if (isEditProject.value) {
-        await api.updateProject(projectForm.value.id!, data)
+
+      if (isEdit.value) {
+        await api.updateBusinessLine(form.value.id!, payload)
         ElMessage.success('更新成功')
       } else {
-        await api.createProject(data)
+        await api.createBusinessLine(payload)
         ElMessage.success('创建成功')
       }
-      projectDialogVisible.value = false
-      isGlobalProjectMode.value = false
-      loadData()
+
+      dialogVisible.value = false
+      await loadData()
     } catch (error) {
-      ElMessage.error(isEditProject.value ? '更新失败' : '创建失败')
+      ElMessage.error(isEdit.value ? '更新失败' : '创建失败')
     }
   })
 }
 
-onMounted(() => { loadData() })
+onMounted(() => {
+  loadData()
+})
 </script>
 
 <template>
-  <div class="organization-page">
-    <div class="page-header">
-      <div>
-        <h2 class="page-title">组织架构</h2>
-        <p class="page-subtitle">管理业务线、项目（含父子层级）及项目团队。</p>
+  <div class="business-line-page">
+    <div class="content-header">
+      <div class="title-with-stats">
+        <h2 class="page-title">业务线管理</h2>
+        <div class="inline-stats">
+          <span class="inline-stat">
+            <span class="stat-num">{{ businessLines.length }}</span>
+            <span class="stat-text">条业务线</span>
+          </span>
+          <span class="inline-stat">
+            <span class="stat-num">{{ totalActiveLines }}</span>
+            <span class="stat-text">启用中</span>
+          </span>
+        </div>
       </div>
-      <button class="btn btn-primary" @click="openAddBL">
-        <el-icon><Plus /></el-icon>
-        新增业务线
-      </button>
-      <button class="btn btn-primary" @click="openAddProjectFromHeader">
-        <el-icon><Plus /></el-icon>
-        新增项目
-      </button>
+      <div class="page-actions">
+        <button class="btn btn-primary" @click="openAdd">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          新增业务线
+        </button>
+      </div>
     </div>
 
-    <div class="card">
+    <div class="table-card">
       <el-table
-        :data="tableData"
+        :data="businessLines"
         v-loading="loading"
-        row-key="id"
-        :tree-props="{ children: 'children', hasChildren: 'hasChildren' }"
-        default-expand-all
+        class="unified-table"
+        :header-cell-style="{ background: 'var(--gray-50)', color: 'var(--gray-600)', fontWeight: 600, fontSize: '12px', borderBottom: '1px solid var(--gray-100)', padding: '10px 12px' }"
+        :cell-style="{ fontSize: '13px', color: 'var(--gray-700)', padding: '10px 12px', borderBottom: '1px solid var(--gray-50)' }"
       >
-        <el-table-column prop="name" label="名称" min-width="200" />
-        <el-table-column label="编码" width="140">
+        <el-table-column prop="name" label="业务线名称" min-width="180" />
+        <el-table-column prop="description" label="描述" min-width="260">
           <template #default="{ row }">
-            {{ row.type === 'project' ? (row.code || '—') : '—' }}
+            {{ row.description || '—' }}
           </template>
         </el-table-column>
-        <el-table-column label="项目经理" width="120">
+        <el-table-column label="状态" width="110">
           <template #default="{ row }">
-            {{ row.type === 'project' ? getManagerName(row.managerId) : '—' }}
+            <span :class="['status-badge', row.status === 1 ? 'green' : 'gray']">
+              {{ row.status === 1 ? '启用' : '停用' }}
+            </span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100">
+        <el-table-column label="更新时间" width="180">
           <template #default="{ row }">
-            <el-tag
-              :type="STATUS_TAG_TYPE[row.status] ?? 'info'"
-              size="small"
-            >
-              {{ row.type === 'business-line' ? STATUS_LABELS[row.status] : PROJECT_STATUS_LABELS[row.status] ?? '—' }}
-            </el-tag>
+            {{ formatDateTime(row.updatedAt || row.createdAt) }}
           </template>
         </el-table-column>
-        <el-table-column label="描述" min-width="200">
+        <el-table-column label="操作" width="140" fixed="right">
           <template #default="{ row }">
-            {{ row.type === 'business-line' ? (row.description || '—') : '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
-          <template #default="{ row }">
-            <template v-if="row.type === 'business-line'">
-              <el-button link type="primary" @click="openAddProject(row)">新增项目</el-button>
-              <el-button link type="primary" @click="handleEditBL(row)">编辑</el-button>
-              <el-button link type="danger" @click="handleDeleteBL(row)">删除</el-button>
-            </template>
-            <template v-else>
-              <el-button link type="primary" @click="openAddProject(row, row)">子项目</el-button>
-              <el-button link type="primary" @click="handleEditProject(row)">编辑</el-button>
-              <el-button link type="danger" @click="handleDeleteProject(row)">删除</el-button>
-            </template>
+            <div class="action-links">
+              <span class="action-link primary" @click="handleEdit(row)">编辑</span>
+              <span class="action-link danger" @click="handleDelete(row)">删除</span>
+            </div>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
-    <!-- Business Line Dialog -->
     <el-dialog
-      v-model="blDialogVisible"
-      :title="isEditBL ? '编辑业务线' : '新增业务线'"
+      v-model="dialogVisible"
+      :title="isEdit ? '编辑业务线' : '新增业务线'"
       width="460px"
     >
-      <el-form ref="blFormRef" :model="blForm" :rules="blRules" label-width="80px">
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="blForm.name" placeholder="如：全渠道云鹿SAAS" />
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="88px">
+        <el-form-item label="业务线名称" prop="name">
+          <el-input v-model="form.name" placeholder="如：电商业务线" />
         </el-form-item>
-        <el-form-item label="描述" prop="description">
-          <el-input v-model="blForm.description" type="textarea" :rows="2" placeholder="业务线描述" />
+        <el-form-item label="描述">
+          <el-input
+            v-model="form.description"
+            type="textarea"
+            :rows="3"
+            placeholder="补充业务线职责、范围或负责人说明"
+          />
         </el-form-item>
         <el-form-item label="状态">
-          <el-switch v-model="blForm.status" :active-value="1" :inactive-value="0"
-                     active-text="启用" inactive-text="禁用" />
+          <el-switch
+            v-model="form.status"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="启用"
+            inactive-text="停用"
+          />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="blDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitBL">确定</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Project Dialog -->
-    <el-dialog
-      v-model="projectDialogVisible"
-      :title="isEditProject ? '编辑项目' : '新增项目'"
-      width="500px"
-    >
-      <el-form ref="projectFormRef" :model="projectForm" :rules="projectRules" label-width="90px">
-        <el-form-item v-if="isGlobalProjectMode" label="业务线" prop="businessLineId">
-          <el-select v-model="projectForm.businessLineId" clearable placeholder="请选择业务线" style="width: 100%">
-            <el-option v-for="bl in allBusinessLines" :key="bl.id" :label="bl.name" :value="bl.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-else label="业务线" prop="businessLineId">
-          <el-input :value="tableData.find(r => r.type === 'business-line' && r.businessLineId === projectForm.businessLineId)?.name" disabled />
-        </el-form-item>
-        <el-form-item label="父项目">
-          <el-select v-model="projectForm.parentId" clearable placeholder="留空为主项目" style="width: 100%">
-            <el-option label="无（主项目）" :value="null" />
-            <el-option
-              v-for="p in projectsOfCurrentBL"
-              :key="p.id"
-              :label="p.name"
-              :value="p.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="projectForm.name" placeholder="如：PMS系统" />
-        </el-form-item>
-        <el-form-item label="编码" prop="code">
-          <el-input v-model="projectForm.code" placeholder="如：PMS" />
-        </el-form-item>
-        <el-form-item label="项目经理">
-          <el-select v-model="projectForm.managerId" clearable placeholder="请选择" style="width: 100%">
-            <el-option v-for="u in allUsers" :key="u.id" :label="u.realName" :value="u.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-switch v-model="projectForm.status" :active-value="1" :inactive-value="0"
-                     active-text="进行中" inactive-text="已结束" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="projectDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitProject">确定</el-button>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.page-header {
+.content-header {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.title-with-stats {
+  display: flex;
+  align-items: center;
   gap: 16px;
-  margin-bottom: 20px;
 }
 
 .page-title {
@@ -496,16 +261,122 @@ onMounted(() => { loadData() })
   margin: 0;
 }
 
-.page-subtitle {
-  margin: 6px 0 0;
-  color: var(--gray-500);
-  font-size: 13px;
+.inline-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 16px;
+  border-left: 1px solid var(--gray-200);
 }
 
-.card {
-  background: white;
-  border-radius: var(--radius-lg);
+.inline-stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-num {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gray-800);
+}
+
+.stat-text {
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+}
+
+.btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark);
+}
+
+.table-card {
+  background: #fff;
+  border-radius: var(--radius-md);
+  overflow: auto;
   box-shadow: var(--shadow-sm);
-  padding: 20px;
+}
+
+.unified-table :deep(.el-table__header-wrapper th) {
+  background: var(--gray-50) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: var(--gray-600) !important;
+  border-bottom: 1px solid var(--gray-100) !important;
+  padding: 10px 12px !important;
+}
+
+.unified-table :deep(.el-table__body-wrapper td) {
+  font-size: 13px !important;
+  color: var(--gray-700) !important;
+  padding: 10px 12px !important;
+  border-bottom: 1px solid var(--gray-50) !important;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.status-badge.green {
+  background: #d1fae5;
+  color: #047857;
+}
+
+.status-badge.gray {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.action-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.action-link {
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.action-link:hover {
+  opacity: 0.8;
+}
+
+.action-link.primary {
+  color: var(--primary);
+}
+
+.action-link.danger {
+  color: var(--danger);
 }
 </style>

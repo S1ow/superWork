@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '@/utils/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
@@ -32,6 +32,17 @@ interface Permission {
   description?: string
   type?: string
   menuId?: number | null
+}
+
+interface BusinessLineOption {
+  id: number
+  name: string
+}
+
+interface ProjectOption {
+  id: number
+  name: string
+  businessLineId: number
 }
 
 const DATA_SCOPE_OPTIONS = [
@@ -67,12 +78,16 @@ const currentRoleName = ref('')
 const menuTree = ref<Menu[]>([])
 const allPermissions = ref<Permission[]>([])
 const authLoading = ref(false)
+const businessLines = ref<BusinessLineOption[]>([])
+const projects = ref<ProjectOption[]>([])
 
 const checkedMenuKeys = ref<number[]>([])
 const focusedMenuId = ref<number | null>(null)
 const menuButtonStates = ref<Map<number, Set<number>>>(new Map())
 const dataScope = ref('SELF')
 const dataScopeValue = ref('')
+const selectedBusinessLineIds = ref<number[]>([])
+const selectedProjectIds = ref<number[]>([])
 
 // Build menu tree
 const buildMenuTree = (menus: Menu[]): Menu[] => {
@@ -133,6 +148,23 @@ const currentMenuButtons = computed(() => {
   return permissionsByMenu.value.get(focusedMenuId.value) ?? []
 })
 
+const availableProjects = computed(() => {
+  if (selectedBusinessLineIds.value.length === 0) return projects.value
+  return projects.value.filter(project => selectedBusinessLineIds.value.includes(project.businessLineId))
+})
+
+const toggleBusinessLineScope = (id: number) => {
+  const index = selectedBusinessLineIds.value.indexOf(id)
+  if (index >= 0) selectedBusinessLineIds.value.splice(index, 1)
+  else selectedBusinessLineIds.value.push(id)
+}
+
+const toggleProjectScope = (id: number) => {
+  const index = selectedProjectIds.value.indexOf(id)
+  if (index >= 0) selectedProjectIds.value.splice(index, 1)
+  else selectedProjectIds.value.push(id)
+}
+
 const isButtonChecked = (permId: number) => {
   if (focusedMenuId.value == null) return false
   return menuButtonStates.value.get(focusedMenuId.value)?.has(permId) ?? false
@@ -148,6 +180,13 @@ const toggleButton = (permId: number) => {
 
 const handleNodeClick = (nodeData: Menu) => {
   focusedMenuId.value = nodeData.id
+}
+
+const parseScopeValues = (value: string) => {
+  return value
+    .split(',')
+    .map(item => Number(item.trim()))
+    .filter(item => Number.isFinite(item))
 }
 
 const loadRoles = async () => {
@@ -220,10 +259,12 @@ const openAuthDialog = async (row: Role) => {
   checkedMenuKeys.value = []
 
   try {
-    const [menus, permissions, auth] = await Promise.all([
+    const [menus, permissions, auth, businessLinePayload, projectPayload] = await Promise.all([
       api.getMenus(),
       api.getPermissions(),
-      api.getRoleAuthorization(row.id)
+      api.getRoleAuthorization(row.id),
+      api.getBusinessLines({ page: 1, size: 999 }),
+      api.getProjects({ page: 1, size: 999 })
     ])
 
     const menuList = Array.isArray(menus) ? menus : []
@@ -252,6 +293,19 @@ const openAuthDialog = async (row: Role) => {
     // Restore data scope
     dataScope.value = auth.dataScope || 'SELF'
     dataScopeValue.value = auth.dataScopeValue || ''
+    businessLines.value = Array.isArray(businessLinePayload?.records) ? businessLinePayload.records : Array.isArray(businessLinePayload) ? businessLinePayload : []
+    projects.value = Array.isArray(projectPayload?.records) ? projectPayload.records : Array.isArray(projectPayload) ? projectPayload : []
+
+    if (dataScope.value === 'BU_LINE') {
+      selectedBusinessLineIds.value = parseScopeValues(dataScopeValue.value)
+      selectedProjectIds.value = []
+    } else if (dataScope.value === 'PROJECT') {
+      selectedProjectIds.value = parseScopeValues(dataScopeValue.value)
+      selectedBusinessLineIds.value = []
+    } else {
+      selectedBusinessLineIds.value = []
+      selectedProjectIds.value = []
+    }
 
     // Focus first checked menu
     if (checkedMenuKeys.value.length > 0) {
@@ -298,6 +352,14 @@ const handleSaveAuth = async () => {
     const allPermIds = new Set<number>()
     menuButtonStates.value.forEach(s => s.forEach(id => allPermIds.add(id)))
 
+    if (dataScope.value === 'BU_LINE') {
+      dataScopeValue.value = selectedBusinessLineIds.value.join(',')
+    } else if (dataScope.value === 'PROJECT') {
+      dataScopeValue.value = selectedProjectIds.value.join(',')
+    } else {
+      dataScopeValue.value = ''
+    }
+
     await api.assignRoleAuthorization(
       currentRoleId.value,
       Array.from(allMenuIds),
@@ -315,55 +377,76 @@ const handleSaveAuth = async () => {
   }
 }
 
-const getStatusLabel = (status: number) => status === 1 ? '启用' : '禁用'
-const getStatusTagType = (status: number) => status === 1 ? 'success' : 'info'
-
 onMounted(() => { loadRoles() })
+
+watch(dataScope, scope => {
+  if (scope === 'BU_LINE') {
+    selectedProjectIds.value = []
+  }
+  if (scope === 'PROJECT') {
+    selectedBusinessLineIds.value = []
+  }
+  if (scope === 'ALL' || scope === 'SELF') {
+    selectedBusinessLineIds.value = []
+    selectedProjectIds.value = []
+  }
+})
 </script>
 
 <template>
   <div class="system-role-page">
-    <div class="page-header">
-      <div>
+    <!-- 页面标题 + 操作按钮 -->
+    <div class="content-header">
+      <div class="title-with-stats">
         <h2 class="page-title">角色管理</h2>
-        <p class="page-subtitle">管理角色菜单权限、按钮权限与数据范围。</p>
+        <div class="inline-stats">
+          <span class="inline-stat">
+            <span class="stat-num">{{ roles.length }}</span>
+            <span class="stat-text">个角色</span>
+          </span>
+        </div>
       </div>
-      <button class="btn btn-primary" @click="handleAdd">
-        <el-icon><Plus /></el-icon>
-        新增角色
-      </button>
+      <div class="page-actions">
+        <button class="btn btn-primary" @click="handleAdd">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          新增角色
+        </button>
+      </div>
     </div>
 
-    <div class="card">
-      <el-table :data="roles" v-loading="loading" stripe>
+    <div class="table-card">
+      <el-table :data="roles" v-loading="loading" class="unified-table"
+        :header-cell-style="{ background: 'var(--gray-50)', color: 'var(--gray-600)', fontWeight: 600, fontSize: '12px', borderBottom: '1px solid var(--gray-100)', padding: '10px 12px' }"
+        :cell-style="{ fontSize: '13px', color: 'var(--gray-700)', padding: '10px 12px', borderBottom: '1px solid var(--gray-50)' }"
+      >
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="code" label="角色编码" min-width="150" />
         <el-table-column prop="name" label="角色名称" min-width="150" />
         <el-table-column prop="description" label="描述" min-width="200" />
         <el-table-column prop="status" label="状态" width="90">
           <template #default="{ row }">
-            <el-tag :type="getStatusTagType(row.status)" size="small">
-              {{ getStatusLabel(row.status) }}
-            </el-tag>
+            <span :class="['status-badge', row.status === 1 ? 'green' : 'gray']">
+              {{ row.status === 1 ? '启用' : '禁用' }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" min-width="180" />
         <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" @click="openAuthDialog(row)">配置授权</el-button>
-            <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+            <div class="action-links">
+              <span class="action-link primary" @click="openAuthDialog(row)">配置授权</span>
+              <span class="action-link primary" @click="handleEdit(row)">编辑</span>
+              <span class="action-link danger" @click="handleDelete(row)">删除</span>
+            </div>
           </template>
         </el-table-column>
       </el-table>
     </div>
 
     <!-- Role CRUD Dialog -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="isEdit ? '编辑角色' : '新增角色'"
-      width="500px"
-    >
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑角色' : '新增角色'" width="500px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
         <el-form-item label="角色编码" prop="code">
           <el-input v-model="form.code" :disabled="isEdit" placeholder="如: PM_MANAGER" />
@@ -386,88 +469,68 @@ onMounted(() => { loadRoles() })
     </el-dialog>
 
     <!-- Authorization Dialog -->
-    <el-dialog
-      v-model="authDialogVisible"
-      :title="`配置授权 - ${currentRoleName}`"
-      width="1000px"
-      destroy-on-close
-    >
+    <el-dialog v-model="authDialogVisible" :title="`配置授权 - ${currentRoleName}`" width="1000px" destroy-on-close>
       <div v-loading="authLoading" class="auth-layout">
         <div class="auth-columns">
-          <!-- Left: Menu Tree -->
-          <div class="auth-menu-col">
+          <div class="auth-menu-col auth-menu">
             <div class="menu-col-header">菜单权限</div>
-            <el-tree
-              ref="menuTreeRef"
-              :data="menuTree"
-              :props="{ label: 'name', children: 'children' }"
-              show-checkbox
-              node-key="id"
-              v-model:checked-keys="checkedMenuKeys"
-              @node-click="handleNodeClick"
-              :check-strictly="false"
-            />
+            <el-tree ref="menuTreeRef" :data="menuTree" :props="{ label: 'name', children: 'children' }" show-checkbox node-key="id" v-model:checked-keys="checkedMenuKeys" @node-click="handleNodeClick" :check-strictly="false" />
           </div>
-
-          <!-- Right: Button Permissions + Data Scope -->
           <div class="auth-right-col">
-            <!-- Button Permissions Section -->
-            <div class="panel-section">
+            <div class="panel-section auth-buttons">
               <div class="section-header">按钮权限</div>
               <template v-if="focusedMenuId">
                 <div class="btn-header">
-                  <span class="btn-menu-name">
-                    {{ allPermissions.find(p => p.menuId === focusedMenuId)?.name ?? '' }}
-                  </span>
+                  <span class="btn-menu-name button-menu-name">{{ menuTree.flatMap(menu => [menu, ...(menu.children || [])]).find(menu => menu.id === focusedMenuId)?.name ?? '' }}</span>
                   <span class="btn-count">{{ currentMenuButtons.length }} 个操作权限</span>
                 </div>
                 <div class="btn-list">
-                  <div
-                    v-for="perm in currentMenuButtons"
-                    :key="perm.id"
-                    class="btn-item"
-                    :class="{ 'btn-checked': isButtonChecked(perm.id) }"
-                    @click="toggleButton(perm.id)"
-                  >
-                    <el-checkbox
-                      :model-value="isButtonChecked(perm.id)"
-                      @click.stop
-                    >
+                  <div v-for="perm in currentMenuButtons" :key="perm.id" class="btn-item" :class="{ 'btn-checked': isButtonChecked(perm.id) }" @click="toggleButton(perm.id)">
+                    <el-checkbox :model-value="isButtonChecked(perm.id)">
                       <span class="perm-name">{{ perm.name }}</span>
                       <span class="perm-code">{{ perm.code }}</span>
                     </el-checkbox>
-                    <el-tag
-                      v-if="perm.type"
-                      size="small"
-                      :type="perm.type === 'button' ? 'warning' : perm.type === 'api' ? 'danger' : 'info'"
-                    >{{ perm.type }}</el-tag>
+                    <el-tag v-if="perm.type" size="small" :type="perm.type === 'button' ? 'warning' : perm.type === 'api' ? 'danger' : 'info'">{{ perm.type }}</el-tag>
                   </div>
                 </div>
               </template>
-              <div v-else class="empty-area">
-                <p>请点击左侧菜单节点</p>
-                <p>查看该菜单下的操作权限</p>
-              </div>
+              <div v-else class="empty-area"><p>请点击左侧菜单节点</p><p>查看该菜单下的操作权限</p></div>
             </div>
-
-            <!-- Data Scope Section -->
             <div class="panel-section section-divider">
               <div class="section-header">数据范围</div>
               <div class="ds-form">
                 <el-radio-group v-model="dataScope" class="ds-radio-group">
-                  <el-radio
-                    v-for="opt in DATA_SCOPE_OPTIONS"
-                    :key="opt.value"
-                    :label="opt.value"
-                  >{{ opt.label }}</el-radio>
+                  <el-radio v-for="opt in DATA_SCOPE_OPTIONS" :key="opt.value" :label="opt.value">{{ opt.label }}</el-radio>
                 </el-radio-group>
                 <div v-if="dataScope === 'BU_LINE'" class="ds-value-row">
-                  <span class="ds-label">业务线 ID：</span>
-                  <el-input v-model="dataScopeValue" placeholder="多个用逗号分隔，如 1,3,5" style="width: 240px" />
+                  <span class="ds-label">业务线：</span>
+                  <div class="scope-choice-grid">
+                    <button
+                      v-for="item in businessLines"
+                      :key="item.id"
+                      type="button"
+                      class="scope-choice"
+                      :class="{ active: selectedBusinessLineIds.includes(item.id) }"
+                      @click="toggleBusinessLineScope(item.id)"
+                    >
+                      {{ item.name }}
+                    </button>
+                  </div>
                 </div>
                 <div v-else-if="dataScope === 'PROJECT'" class="ds-value-row">
-                  <span class="ds-label">项目 ID：</span>
-                  <el-input v-model="dataScopeValue" placeholder="多个用逗号分隔，如 2,4,7" style="width: 240px" />
+                  <span class="ds-label">项目：</span>
+                  <div class="scope-choice-grid">
+                    <button
+                      v-for="item in availableProjects"
+                      :key="item.id"
+                      type="button"
+                      class="scope-choice"
+                      :class="{ active: selectedProjectIds.includes(item.id) }"
+                      @click="toggleProjectScope(item.id)"
+                    >
+                      {{ item.name }}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -483,197 +546,77 @@ onMounted(() => { loadRoles() })
 </template>
 
 <style scoped>
+/* ========== 页面头部 ========== */
+.content-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.title-with-stats { display: flex; align-items: center; gap: 16px; }
+.page-title { font-size: 20px; font-weight: 600; color: var(--gray-800); margin: 0; }
+.inline-stats { display: flex; align-items: center; gap: 8px; padding-left: 16px; border-left: 1px solid var(--gray-200); }
+.inline-stat { display: flex; align-items: center; gap: 4px; }
+.stat-num { font-size: 16px; font-weight: 700; color: var(--gray-800); }
+.stat-text { font-size: 13px; color: var(--gray-500); }
+.page-actions { display: flex; align-items: center; gap: 8px; }
 
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
+/* ========== 按钮 ========== */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: var(--radius-md); font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s ease; }
+.btn svg { width: 16px; height: 16px; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-dark); }
 
-.page-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--gray-800);
-  margin: 0;
-}
+/* ========== 表格 ========== */
+.table-card { background: #FFFFFF; border-radius: var(--radius-md); overflow: auto; box-shadow: var(--shadow-sm); max-height: calc(100vh - 240px); }
+.unified-table :deep(.el-table__header-wrapper th) { background: var(--gray-50) !important; font-size: 12px !important; font-weight: 600 !important; color: var(--gray-600) !important; border-bottom: 1px solid var(--gray-100) !important; }
+.unified-table :deep(.el-table__body-wrapper td) { font-size: 13px !important; color: var(--gray-700) !important; border-bottom: 1px solid var(--gray-50) !important; }
+.unified-table :deep(.el-table__body-wrapper tr:hover > td) { background: var(--gray-50) !important; }
+.unified-table :deep(.el-table__border-left-patch), .unified-table :deep(.el-table__inner-wrapper::before) { display: none !important; }
 
-.page-subtitle {
-  margin: 6px 0 0;
-  color: var(--gray-500);
-  font-size: 13px;
-}
+/* ========== 状态标签 ========== */
+.status-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.status-badge.gray { background: var(--gray-100); color: var(--gray-600); }
+.status-badge.green { background: #d1fae5; color: #047857; }
 
-.card {
-  background: white;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  padding: 20px;
-}
+/* ========== 操作链接 ========== */
+.action-links { display: flex; align-items: center; gap: 12px; }
+.action-link { font-size: 13px; font-weight: 500; cursor: pointer; transition: opacity 0.15s ease; }
+.action-link:hover { opacity: 0.8; }
+.action-link.primary { color: var(--primary); }
+.action-link.danger { color: var(--danger); }
 
-/* Authorization Layout */
-.auth-layout {
-  min-height: 520px;
-}
-
-.auth-columns {
-  display: flex;
-  gap: 16px;
-  min-height: 520px;
-}
-
-.menu-col-header {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--gray-700);
-  margin-bottom: 8px;
-  padding-left: 6px;
-}
-
-.auth-menu-col {
-  flex: 0 0 340px;
-  overflow-y: auto;
-  border: 1px solid var(--gray-200);
-  border-radius: 8px;
-  padding: 14px;
-}
-
-.auth-right-col {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  min-height: 520px;
-}
-
-.panel-section {
-  flex-shrink: 0;
-  padding: 12px 16px;
-}
-
-.section-divider {
-  border-top: 1px solid var(--gray-200);
-}
-
-.section-header {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--gray-600);
-  margin-bottom: 10px;
-}
-
-/* Button List */
-.btn-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.btn-menu-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--gray-800);
-}
-
-.btn-count {
-  font-size: 12px;
-  color: var(--gray-400);
-}
-
-.btn-list {
-  overflow-y: auto;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.btn-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.btn-item:hover {
-  background: var(--gray-50);
-}
-
-.btn-checked {
-  background: var(--gray-50);
-}
-
-.perm-name {
-  font-size: 13px;
-  color: var(--gray-800);
-  margin-right: 8px;
-}
-
-.perm-code {
-  font-size: 11px;
-  color: var(--gray-400);
-  font-family: monospace;
-}
-
-.empty-area {
-  text-align: center;
-  color: var(--gray-400);
-  font-size: 13px;
-  margin-top: 60px;
-}
-
-.empty-area p {
-  margin: 4px 0;
-}
-
-/* Data Scope Form */
-.ds-form {
-  padding: 4px 0;
-}
-
-.ds-radio-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-:deep(.ds-radio-group .el-radio) {
-  margin-right: 6px;
-  margin-bottom: 0;
-}
-
-.ds-value-row {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.ds-label {
-  font-size: 13px;
-  color: var(--gray-600);
-  white-space: nowrap;
-}
+/* ========== 授权弹窗 ========== */
+.auth-layout { min-height: 520px; }
+.auth-columns { display: flex; gap: 16px; min-height: 520px; }
+.menu-col-header { font-size: 14px; font-weight: 600; color: var(--gray-700); margin-bottom: 8px; padding-left: 6px; }
+.auth-menu-col { flex: 0 0 340px; overflow-y: auto; border: 1px solid var(--gray-200); border-radius: 8px; padding: 14px; }
+.auth-right-col { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0; min-height: 520px; }
+.panel-section { flex-shrink: 0; padding: 12px 16px; }
+.section-divider { border-top: 1px solid var(--gray-200); }
+.section-header { font-size: 13px; font-weight: 600; color: var(--gray-600); margin-bottom: 10px; }
+.btn-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.btn-menu-name { font-size: 14px; font-weight: 600; color: var(--gray-800); }
+.btn-count { font-size: 12px; color: var(--gray-400); }
+.btn-list { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.btn-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 10px; cursor: pointer; transition: background 0.15s, border-color 0.15s; border: 1px solid transparent; }
+.btn-item:hover { background: var(--gray-50); }
+.btn-checked { background: var(--gray-50); border-color: rgba(79, 70, 229, 0.18); }
+.btn-item :deep(.el-checkbox) { width: 100%; pointer-events: none; }
+.btn-item :deep(.el-checkbox__input) { pointer-events: none; }
+.btn-item :deep(.el-checkbox__label) { width: 100%; display: flex; align-items: center; gap: 8px; }
+.perm-name { font-size: 13px; color: var(--gray-800); margin-right: 8px; }
+.perm-code { font-size: 11px; color: var(--gray-400); font-family: monospace; }
+.empty-area { text-align: center; color: var(--gray-400); font-size: 13px; margin-top: 60px; }
+.empty-area p { margin: 4px 0; }
+.ds-form { padding: 4px 0; }
+.ds-radio-group { display: flex; flex-direction: row; flex-wrap: wrap; gap: 10px 18px; }
+:deep(.ds-radio-group .el-radio) { margin-right: 6px; margin-bottom: 0; }
+.ds-value-row { margin-top: 12px; display: flex; align-items: flex-start; gap: 10px; }
+.ds-label { font-size: 13px; color: var(--gray-600); white-space: nowrap; }
+.scope-choice-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.scope-choice { border: 1px solid var(--gray-200); border-radius: 999px; background: #fff; color: var(--gray-600); padding: 7px 12px; font-size: 12px; cursor: pointer; transition: all 0.15s ease; }
+.scope-choice:hover { border-color: var(--primary); color: var(--primary); }
+.scope-choice.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
 @media (max-width: 768px) {
-  .auth-columns {
-    flex-direction: column;
-    height: auto;
-  }
-
-  .auth-menu-col {
-    flex: none;
-    max-height: 280px;
-  }
-
-  .auth-right-col {
-    max-height: 320px;
-  }
+  .auth-columns { flex-direction: column; height: auto; }
+  .auth-menu-col { flex: none; max-height: 280px; }
+  .auth-right-col { max-height: 320px; }
 }
 </style>

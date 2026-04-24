@@ -5,18 +5,23 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.bu.management.dto.RequirementRequest;
 import com.bu.management.entity.BusinessLine;
 import com.bu.management.entity.CustomerContact;
+import com.bu.management.entity.DesignWorkLog;
 import com.bu.management.entity.Project;
 import com.bu.management.entity.Requirement;
+import com.bu.management.entity.Task;
 import com.bu.management.exception.ResourceNotFoundException;
 import com.bu.management.mapper.BusinessLineMapper;
 import com.bu.management.mapper.CustomerContactMapper;
+import com.bu.management.mapper.DesignWorkLogMapper;
 import com.bu.management.mapper.ProjectMapper;
 import com.bu.management.mapper.RequirementMapper;
+import com.bu.management.mapper.TaskMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -36,6 +41,8 @@ public class RequirementService {
     private final ProjectMapper projectMapper;
     private final CustomerContactMapper customerContactMapper;
     private final DataPermissionService dataPermissionService;
+    private final TaskMapper taskMapper;
+    private final DesignWorkLogMapper designWorkLogMapper;
 
     /**
      * 创建需求
@@ -164,6 +171,29 @@ public class RequirementService {
     }
 
     /**
+     * 执行简单阶段动作
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public Requirement executeStageAction(Long id, String action) {
+        Requirement requirement = getById(id);
+        String normalizedAction = normalizeAction(action);
+
+        switch (normalizedAction) {
+            case "start_eval" -> updateStatus(requirement, "待评估", "评估中");
+            case "start_design" -> startDesign(requirement);
+            case "reject" -> rejectRequirement(requirement);
+            case "start_test" -> startTest(requirement);
+            case "test_pass" -> updateStatus(requirement, "测试中", "待上线");
+            case "test_fail" -> updateStatus(requirement, "测试中", "开发中");
+            case "go_online" -> goOnline(requirement);
+            default -> throw new RuntimeException("不支持的阶段动作: " + normalizedAction);
+        }
+
+        requirementMapper.updateById(requirement);
+        return requirement;
+    }
+
+    /**
      * 分页查询需求列表（无权限过滤 - 管理员使用）
      */
     public Page<Requirement> list(Integer page, Integer size, Long businessLineId, Long projectId,
@@ -255,5 +285,84 @@ public class RequirementService {
 
         String sequence = String.format("%04d", count + 1);
         return prefix + timestamp + sequence;
+    }
+
+    private void rejectRequirement(Requirement requirement) {
+        String currentStatus = requirement.getStatus();
+        if (!"待评估".equals(currentStatus) && !"评估中".equals(currentStatus)) {
+            throw new RuntimeException("当前状态不允许标记为已拒绝");
+        }
+        requirement.setStatus("已拒绝");
+        requirement.setUpdatedAt(LocalDateTime.now());
+    }
+
+    private void startDesign(Requirement requirement) {
+        if (!"待设计".equals(requirement.getStatus())) {
+            throw new RuntimeException("只有待设计的需求才能开始设计");
+        }
+
+        LambdaQueryWrapper<DesignWorkLog> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(DesignWorkLog::getRequirementId, requirement.getId());
+        List<DesignWorkLog> workLogs = designWorkLogMapper.selectList(wrapper);
+
+        if (workLogs.isEmpty()) {
+            throw new RuntimeException("请先配置设计规划");
+        }
+
+        requirement.setStatus("设计中");
+        requirement.setUpdatedAt(LocalDateTime.now());
+
+        workLogs.stream()
+                .filter(log -> "待开始".equals(log.getStatus()))
+                .forEach(log -> {
+                    log.setStatus("进行中");
+                    if (log.getStartedAt() == null) {
+                        log.setStartedAt(LocalDateTime.now());
+                    }
+                    log.setUpdatedAt(LocalDateTime.now());
+                    designWorkLogMapper.updateById(log);
+                });
+    }
+
+    private void startTest(Requirement requirement) {
+        if (!"开发中".equals(requirement.getStatus())) {
+            throw new RuntimeException("只有开发中的需求才能提测");
+        }
+
+        LambdaQueryWrapper<Task> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(Task::getRequirementId, requirement.getId());
+        List<Task> tasks = taskMapper.selectList(wrapper);
+
+        if (tasks.isEmpty()) {
+            throw new RuntimeException("请先创建任务后再提测");
+        }
+
+        boolean hasIncompleteTask = tasks.stream()
+                .map(Task::getStatus)
+                .anyMatch(status -> !"已完成".equals(status) && !"已测试".equals(status));
+
+        if (hasIncompleteTask) {
+            throw new RuntimeException("所有任务完成后才能提测");
+        }
+
+        requirement.setStatus("测试中");
+        requirement.setUpdatedAt(LocalDateTime.now());
+    }
+
+    private void goOnline(Requirement requirement) {
+        updateStatus(requirement, "待上线", "已上线");
+        requirement.setActualOnlineDate(LocalDate.now());
+    }
+
+    private void updateStatus(Requirement requirement, String expectedStatus, String targetStatus) {
+        if (!expectedStatus.equals(requirement.getStatus())) {
+            throw new RuntimeException("当前状态不允许执行该操作");
+        }
+        requirement.setStatus(targetStatus);
+        requirement.setUpdatedAt(LocalDateTime.now());
+    }
+
+    private String normalizeAction(String action) {
+        return action == null ? "" : action.trim().toLowerCase();
     }
 }

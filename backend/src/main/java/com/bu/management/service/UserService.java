@@ -4,8 +4,11 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.bu.management.dto.UserRequest;
 import com.bu.management.entity.User;
+import com.bu.management.entity.SysUserRole;
+import com.bu.management.mapper.SysUserRoleMapper;
 import com.bu.management.mapper.UserMapper;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,6 +26,7 @@ public class UserService {
 
     private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
+    private final SysUserRoleMapper sysUserRoleMapper;
 
     /**
      * 创建用户
@@ -128,6 +132,29 @@ public class UserService {
 
         user.setStatus(status);
         userMapper.updateById(user);
+    }
+
+    /**
+     * 删除用户。若用户已被历史业务数据引用，回退为停用，避免外键约束导致 500。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public boolean delete(Long id) {
+        User user = userMapper.selectById(id);
+        if (user == null) {
+            throw new RuntimeException("用户不存在");
+        }
+
+        try {
+            userMapper.deleteById(id);
+            LambdaQueryWrapper<SysUserRole> wrapper = new LambdaQueryWrapper<>();
+            wrapper.eq(SysUserRole::getUserId, id);
+            sysUserRoleMapper.delete(wrapper);
+            return true;
+        } catch (DataIntegrityViolationException e) {
+            user.setStatus(0);
+            userMapper.updateById(user);
+            return false;
+        }
     }
 
     /**

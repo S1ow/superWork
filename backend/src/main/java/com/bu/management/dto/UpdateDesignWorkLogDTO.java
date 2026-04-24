@@ -3,6 +3,7 @@ package com.bu.management.dto;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * 更新设计工作记录 DTO
@@ -29,7 +30,22 @@ public class UpdateDesignWorkLogDTO {
     private String workContent;
 
     /**
-     * 状态：进行中/已完成
+     * 设计人ID
+     */
+    private Long designerId;
+
+    /**
+     * 预估工时
+     */
+    private BigDecimal estimatedHours;
+
+    /**
+     * 计划完成时间
+     */
+    private LocalDateTime plannedCompletedAt;
+
+    /**
+     * 状态：待开始/进行中/已完成
      */
     private String status;
 }

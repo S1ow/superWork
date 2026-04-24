@@ -5,12 +5,16 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.bu.management.dto.RequirementRequest;
 import com.bu.management.entity.BusinessLine;
 import com.bu.management.entity.CustomerContact;
+import com.bu.management.entity.DesignWorkLog;
 import com.bu.management.entity.Project;
 import com.bu.management.entity.Requirement;
+import com.bu.management.entity.Task;
 import com.bu.management.mapper.BusinessLineMapper;
 import com.bu.management.mapper.CustomerContactMapper;
+import com.bu.management.mapper.DesignWorkLogMapper;
 import com.bu.management.mapper.ProjectMapper;
 import com.bu.management.mapper.RequirementMapper;
+import com.bu.management.mapper.TaskMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -48,6 +52,12 @@ class RequirementServiceTest {
 
     @Mock
     private CustomerContactMapper customerContactMapper;
+
+    @Mock
+    private TaskMapper taskMapper;
+
+    @Mock
+    private DesignWorkLogMapper designWorkLogMapper;
 
     @InjectMocks
     private RequirementService requirementService;
@@ -307,6 +317,118 @@ class RequirementServiceTest {
             assertThatThrownBy(() -> requirementService.getById(99L))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessage("需求不存在");
+        }
+    }
+
+    @Nested
+    @DisplayName("executeStageAction 方法测试")
+    class ExecuteStageActionTests {
+
+        @Test
+        @DisplayName("开始评估成功")
+        void executeStageAction_startEval_success() {
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+
+            Requirement result = requirementService.executeStageAction(1L, "start_eval");
+
+            assertThat(result.getStatus()).isEqualTo("评估中");
+            verify(requirementMapper).updateById(existingRequirement);
+        }
+
+        @Test
+        @DisplayName("驳回需求成功")
+        void executeStageAction_reject_success() {
+            existingRequirement.setStatus("评估中");
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+
+            Requirement result = requirementService.executeStageAction(1L, "reject");
+
+            assertThat(result.getStatus()).isEqualTo("已拒绝");
+            verify(requirementMapper).updateById(existingRequirement);
+        }
+
+        @Test
+        @DisplayName("待设计且已配置设计规划时可以开始设计")
+        void executeStageAction_startDesign_success() {
+            DesignWorkLog log = new DesignWorkLog();
+            log.setId(10L);
+            log.setRequirementId(1L);
+            log.setWorkType("UI设计");
+            log.setStatus("待开始");
+
+            existingRequirement.setStatus("待设计");
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+            when(designWorkLogMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(java.util.List.of(log));
+
+            Requirement result = requirementService.executeStageAction(1L, "start_design");
+
+            assertThat(result.getStatus()).isEqualTo("设计中");
+            verify(designWorkLogMapper).updateById(any(DesignWorkLog.class));
+            verify(requirementMapper).updateById(existingRequirement);
+        }
+
+        @Test
+        @DisplayName("待设计但未配置设计规划时不能开始设计")
+        void executeStageAction_startDesign_withoutPlan_throwsException() {
+            existingRequirement.setStatus("待设计");
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+            when(designWorkLogMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(java.util.List.of());
+
+            assertThatThrownBy(() -> requirementService.executeStageAction(1L, "start_design"))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessage("请先配置设计规划");
+        }
+
+        @Test
+        @DisplayName("开发中存在未完成任务时不能提测")
+        void executeStageAction_startTest_withIncompleteTasks_throwsException() {
+            Task task = new Task();
+            task.setStatus("进行中");
+            existingRequirement.setStatus("开发中");
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+            when(taskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(java.util.List.of(task));
+
+            assertThatThrownBy(() -> requirementService.executeStageAction(1L, "start_test"))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessage("所有任务完成后才能提测");
+        }
+
+        @Test
+        @DisplayName("开发中全部任务完成后可以提测")
+        void executeStageAction_startTest_success() {
+            Task task = new Task();
+            task.setStatus("已完成");
+            existingRequirement.setStatus("开发中");
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+            when(taskMapper.selectList(any(LambdaQueryWrapper.class))).thenReturn(java.util.List.of(task));
+
+            Requirement result = requirementService.executeStageAction(1L, "start_test");
+
+            assertThat(result.getStatus()).isEqualTo("测试中");
+            verify(requirementMapper).updateById(existingRequirement);
+        }
+
+        @Test
+        @DisplayName("测试通过后进入待上线")
+        void executeStageAction_testPass_success() {
+            existingRequirement.setStatus("测试中");
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+
+            Requirement result = requirementService.executeStageAction(1L, "test_pass");
+
+            assertThat(result.getStatus()).isEqualTo("待上线");
+        }
+
+        @Test
+        @DisplayName("待上线确认上线后记录实际上线日期")
+        void executeStageAction_goOnline_success() {
+            existingRequirement.setStatus("待上线");
+            when(requirementMapper.selectById(1L)).thenReturn(existingRequirement);
+
+            Requirement result = requirementService.executeStageAction(1L, "go_online");
+
+            assertThat(result.getStatus()).isEqualTo("已上线");
+            assertThat(result.getActualOnlineDate()).isEqualTo(LocalDate.now());
         }
     }
 

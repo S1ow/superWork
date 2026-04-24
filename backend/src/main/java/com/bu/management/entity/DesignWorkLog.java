@@ -57,7 +57,12 @@ public class DesignWorkLog {
     private String workContent;
 
     /**
-     * 状态：进行中/已完成
+     * 计划完成时间
+     */
+    private LocalDateTime plannedCompletedAt;
+
+    /**
+     * 状态：待开始/进行中/已完成
      */
     private String status;
 

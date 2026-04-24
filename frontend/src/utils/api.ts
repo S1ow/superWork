@@ -62,12 +62,25 @@ class ApiService {
     })
 
     if (!response.ok) {
+      const errorText = await response.text()
+      let errorMessage = `HTTP error! status: ${response.status}`
+      try {
+        const parsed = errorText ? JSON.parse(errorText) : null
+        if (parsed?.message) {
+          errorMessage = parsed.message
+        }
+      } catch {
+        if (errorText) {
+          errorMessage = errorText
+        }
+      }
+
       if (response.status === 401) {
         localStorage.removeItem('token')
         localStorage.removeItem('user')
         window.location.href = '/login'
       }
-      throw new Error(`HTTP error! status: ${response.status}`)
+      throw new Error(errorMessage)
     }
 
     const text = await response.text()
@@ -238,12 +251,206 @@ class ApiService {
     })
   }
 
+  async executeRequirementStageAction(id: number, action: string): Promise<any> {
+    return this.request(`/api/requirements/${id}/stage-actions`, {
+      method: 'POST',
+      body: JSON.stringify({ action })
+    })
+  }
+
+  async getRequirementTransitionInfo(id: number): Promise<any> {
+    return this.request(`/api/requirement-transitions/${id}`)
+  }
+
+  async submitRequirementEvaluation(data: {
+    requirementId: number
+    isFeasible: number
+    feasibilityDesc?: string
+    estimatedWorkload?: number
+    estimatedCost?: number
+    workBreakdown?: string
+    suggestProduct?: number
+  }): Promise<any> {
+    return this.request('/api/requirement-evaluations', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async getRequirementEvaluation(requirementId: number): Promise<any> {
+    return this.request(`/api/requirement-evaluations/by-requirement/${requirementId}`)
+  }
+
+  async submitBuDecision(data: {
+    requirementId: number
+    decision: string
+    decisionReason?: string
+  }): Promise<any> {
+    return this.request('/api/bu-decisions', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async getRequirementDesign(requirementId: number): Promise<any> {
+    return this.request(`/api/requirement-designs/${requirementId}`)
+  }
+
+  async createRequirementDesign(data: {
+    requirementId: number
+    prototypeStatus?: string
+    uiStatus?: string
+    techSolutionStatus?: string
+  }): Promise<any> {
+    return this.request('/api/requirement-designs', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async updateRequirementDesign(requirementId: number, data: {
+    prototypeStatus?: string
+    uiStatus?: string
+    techSolutionStatus?: string
+  }): Promise<any> {
+    return this.request(`/api/requirement-designs/${requirementId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async getRequirementConfirmation(requirementId: number): Promise<any> {
+    return this.request(`/api/requirement-confirmations/${requirementId}`)
+  }
+
+  async createRequirementConfirmation(data: {
+    requirementId: number
+    confirmationType: string
+    confirmedBy: number
+    confirmationNotes?: string
+  }): Promise<any> {
+    return this.request('/api/requirement-confirmations', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async getRequirementDelivery(requirementId: number): Promise<any> {
+    return this.request(`/api/requirement-deliveries/${requirementId}`)
+  }
+
+  async getDesignWorkLogs(requirementId: number): Promise<any[]> {
+    return this.request(`/api/design-work-logs/requirement/${requirementId}`)
+  }
+
+  async createDesignWorkLog(data: {
+    requirementId: number
+    workType: string
+    designerId: number
+    estimatedHours?: number
+    workContent?: string
+    plannedCompletedAt?: string
+    status?: string
+  }): Promise<any> {
+    return this.request('/api/design-work-logs', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async updateDesignWorkLog(id: number, data: {
+    actualHours?: number
+    resultUrl?: string
+    workContent?: string
+    designerId?: number
+    estimatedHours?: number
+    plannedCompletedAt?: string
+    status?: string
+  }): Promise<any> {
+    return this.request(`/api/design-work-logs/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async deleteDesignWorkLog(id: number): Promise<void> {
+    return this.request(`/api/design-work-logs/${id}`, {
+      method: 'DELETE'
+    })
+  }
+
+  async createRequirementDelivery(data: {
+    requirementId: number
+    deliveredBy: number
+    deliveryNotes?: string
+  }): Promise<any> {
+    return this.request('/api/requirement-deliveries', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async acceptRequirementDelivery(requirementId: number, data: {
+    acceptedBy: number
+    acceptanceNotes?: string
+  }): Promise<any> {
+    return this.request(`/api/requirement-deliveries/${requirementId}/accept`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async getRequirementTasks(requirementId: number): Promise<any[]> {
+    return this.request(`/api/tasks/requirement/${requirementId}`)
+  }
+
+  async createTask(data: {
+    requirementId: number
+    title: string
+    description?: string
+    assigneeId?: number
+    taskType?: string
+    createdBy?: number
+    estimatedHours?: number
+  }): Promise<any> {
+    return this.request('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    })
+  }
+
+  async updateTask(id: number, data: {
+    title?: string
+    description?: string
+    assigneeId?: number
+    estimatedHours?: number
+    actualHours?: number
+    status?: string
+  }): Promise<any> {
+    return this.request(`/api/tasks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    })
+  }
+
   // User APIs
-  async getUsers(params?: { page?: number; size?: number; keyword?: string }): Promise<any> {
+  async getUsers(params?: {
+    page?: number
+    size?: number
+    keyword?: string
+    username?: string
+    realName?: string
+    role?: string
+    status?: number
+  }): Promise<any> {
     const searchParams = new URLSearchParams()
     if (params?.page) searchParams.set('page', String(params.page))
     if (params?.size) searchParams.set('size', String(params.size))
     if (params?.keyword) searchParams.set('keyword', params.keyword)
+    if (params?.username) searchParams.set('username', params.username)
+    if (params?.realName) searchParams.set('realName', params.realName)
+    if (params?.role) searchParams.set('role', params.role)
+    if (params?.status !== undefined) searchParams.set('status', String(params.status))
 
     const query = searchParams.toString() ? `?${searchParams.toString()}` : ''
     return this.request(`/api/users${query}`)
@@ -385,6 +592,10 @@ class ApiService {
     return this.request(`/api/workflow-configs/type/${requirementType}`)
   }
 
+  async getWorkflowStatusOptions(): Promise<Record<string, string[]>> {
+    return this.request('/api/workflow-configs/meta/status-options')
+  }
+
   async getNextStatuses(requirementType: string, currentStatus: string): Promise<string[]> {
     return this.request(`/api/workflow-configs/next-statuses?requirementType=${requirementType}&currentStatus=${currentStatus}`)
   }
@@ -397,6 +608,28 @@ class ApiService {
   // Customer Contact APIs
   async getCustomerContacts(projectId?: number): Promise<any[]> {
     const query = projectId ? `?projectId=${projectId}` : ''
+    const result = await this.request<any>(`/api/customer-contacts${query}`)
+    if (Array.isArray(result)) return result
+    if (Array.isArray(result?.records)) return result.records
+    if (Array.isArray(result?.data?.records)) return result.data.records
+    if (Array.isArray(result?.data)) return result.data
+    return []
+  }
+
+  async getCustomerContactPage(params?: {
+    page?: number
+    size?: number
+    projectId?: number
+    name?: string
+    isActive?: number
+  }): Promise<any> {
+    const searchParams = new URLSearchParams()
+    if (params?.page) searchParams.set('page', String(params.page))
+    if (params?.size) searchParams.set('size', String(params.size))
+    if (params?.projectId) searchParams.set('projectId', String(params.projectId))
+    if (params?.name) searchParams.set('name', params.name)
+    if (params?.isActive !== undefined) searchParams.set('isActive', String(params.isActive))
+    const query = searchParams.toString() ? `?${searchParams.toString()}` : ''
     return this.request(`/api/customer-contacts${query}`)
   }
 
@@ -407,20 +640,33 @@ class ApiService {
     })
   }
 
-  // Project Member APIs
-  async getProjectMembers(projectId: number): Promise<any[]> {
-    return this.request(`/api/project-members/${projectId}`)
+  async updateCustomerContact(id: number, data: any): Promise<any> {
+    return this.request(`/api/customer-contacts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    })
   }
 
-  async addProjectMember(data: any): Promise<any> {
+  async deleteCustomerContact(id: number): Promise<void> {
+    return this.request(`/api/customer-contacts/${id}`, {
+      method: 'DELETE'
+    })
+  }
+
+  // Project Member APIs
+  async getProjectMembers(projectId: number): Promise<any[]> {
+    return this.request(`/api/project-members/by-project?projectId=${projectId}`)
+  }
+
+  async addProjectMember(data: { projectId: number; userId: number; role?: string }): Promise<any> {
     return this.request('/api/project-members', {
       method: 'POST',
       body: JSON.stringify(data)
     })
   }
 
-  async removeProjectMember(id: number): Promise<void> {
-    return this.request(`/api/project-members/${id}`, {
+  async removeProjectMember(projectId: number, userId: number): Promise<void> {
+    return this.request(`/api/project-members?projectId=${projectId}&userId=${userId}`, {
       method: 'DELETE'
     })
   }

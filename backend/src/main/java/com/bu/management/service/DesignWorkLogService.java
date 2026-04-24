@@ -6,11 +6,14 @@ import com.bu.management.dto.CreateDesignWorkLogDTO;
 import com.bu.management.dto.UpdateDesignWorkLogDTO;
 import com.bu.management.entity.DesignWorkLog;
 import com.bu.management.entity.Requirement;
+import com.bu.management.entity.RequirementDesign;
 import com.bu.management.mapper.DesignWorkLogMapper;
+import com.bu.management.mapper.RequirementDesignMapper;
 import com.bu.management.mapper.RequirementMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,8 +28,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class DesignWorkLogService {
 
+    private static final String PROTOTYPE = "原型设计";
+    private static final String UI = "UI设计";
+    private static final String TECH = "技术方案设计";
+
     private final DesignWorkLogMapper workLogMapper;
     private final RequirementMapper requirementMapper;
+    private final RequirementDesignMapper requirementDesignMapper;
 
     /**
      * 创建设计工作记录
@@ -39,19 +47,32 @@ public class DesignWorkLogService {
             throw new RuntimeException("需求不存在");
         }
 
-        // 创建工作记录
-        DesignWorkLog workLog = new DesignWorkLog();
-        workLog.setRequirementId(dto.getRequirementId());
-        workLog.setWorkType(dto.getWorkType());
-        workLog.setDesignerId(dto.getDesignerId());
-        workLog.setEstimatedHours(dto.getEstimatedHours());
-        workLog.setWorkContent(dto.getWorkContent());
-        workLog.setStatus("进行中");
-        workLog.setStartedAt(LocalDateTime.now());
-        workLog.setCreatedAt(LocalDateTime.now());
-        workLog.setUpdatedAt(LocalDateTime.now());
+        if (!StringUtils.hasText(dto.getWorkType())) {
+            throw new RuntimeException("设计环节不能为空");
+        }
+        if (dto.getDesignerId() == null) {
+            throw new RuntimeException("设计负责人不能为空");
+        }
 
-        workLogMapper.insert(workLog);
+        LambdaQueryWrapper<DesignWorkLog> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(DesignWorkLog::getRequirementId, dto.getRequirementId())
+                .eq(DesignWorkLog::getWorkType, dto.getWorkType());
+        DesignWorkLog workLog = workLogMapper.selectOne(wrapper);
+
+        if (workLog == null) {
+            workLog = new DesignWorkLog();
+            workLog.setRequirementId(dto.getRequirementId());
+            workLog.setWorkType(dto.getWorkType());
+            workLog.setCreatedAt(LocalDateTime.now());
+        }
+
+        applyWorkLog(workLog, dto.getDesignerId(), dto.getEstimatedHours(), dto.getWorkContent(), dto.getPlannedCompletedAt(), dto.getStatus());
+        if (workLog.getId() == null) {
+            workLogMapper.insert(workLog);
+        } else {
+            workLogMapper.updateById(workLog);
+        }
+        syncRequirementDesign(requirement.getId());
         return workLog;
     }
 
@@ -68,21 +89,36 @@ public class DesignWorkLogService {
         if (dto.getActualHours() != null) {
             workLog.setActualHours(dto.getActualHours());
         }
+        if (dto.getDesignerId() != null) {
+            workLog.setDesignerId(dto.getDesignerId());
+        }
+        if (dto.getEstimatedHours() != null) {
+            workLog.setEstimatedHours(dto.getEstimatedHours());
+        }
         if (dto.getResultUrl() != null) {
             workLog.setResultUrl(dto.getResultUrl());
         }
         if (dto.getWorkContent() != null) {
             workLog.setWorkContent(dto.getWorkContent());
         }
+        if (dto.getPlannedCompletedAt() != null) {
+            workLog.setPlannedCompletedAt(dto.getPlannedCompletedAt());
+        }
         if (dto.getStatus() != null) {
             workLog.setStatus(dto.getStatus());
+            if ("进行中".equals(dto.getStatus()) && workLog.getStartedAt() == null) {
+                workLog.setStartedAt(LocalDateTime.now());
+            }
             if ("已完成".equals(dto.getStatus())) {
                 workLog.setCompletedAt(LocalDateTime.now());
+            } else {
+                workLog.setCompletedAt(null);
             }
         }
         workLog.setUpdatedAt(LocalDateTime.now());
 
         workLogMapper.updateById(workLog);
+        syncRequirementDesign(workLog.getRequirementId());
         return workLog;
     }
 
@@ -122,6 +158,90 @@ public class DesignWorkLogService {
      */
     @Transactional
     public void deleteWorkLog(Long id) {
+        DesignWorkLog workLog = workLogMapper.selectById(id);
+        if (workLog == null) {
+            return;
+        }
         workLogMapper.deleteById(id);
+        syncRequirementDesign(workLog.getRequirementId());
+    }
+
+    private void applyWorkLog(
+            DesignWorkLog workLog,
+            Long designerId,
+            java.math.BigDecimal estimatedHours,
+            String workContent,
+            LocalDateTime plannedCompletedAt,
+            String status
+    ) {
+        workLog.setDesignerId(designerId);
+        workLog.setEstimatedHours(estimatedHours);
+        workLog.setWorkContent(workContent);
+        workLog.setPlannedCompletedAt(plannedCompletedAt);
+        workLog.setStatus(StringUtils.hasText(status) ? status : "待开始");
+        if ("进行中".equals(workLog.getStatus()) && workLog.getStartedAt() == null) {
+            workLog.setStartedAt(LocalDateTime.now());
+        }
+        if (!"已完成".equals(workLog.getStatus())) {
+            workLog.setCompletedAt(null);
+        }
+        workLog.setUpdatedAt(LocalDateTime.now());
+    }
+
+    private void syncRequirementDesign(Long requirementId) {
+        Requirement requirement = requirementMapper.selectById(requirementId);
+        if (requirement == null) {
+            return;
+        }
+
+        List<DesignWorkLog> logs = getWorkLogsByRequirementId(requirementId);
+
+        if (logs.isEmpty()) {
+            return;
+        }
+
+        LambdaQueryWrapper<RequirementDesign> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(RequirementDesign::getRequirementId, requirementId);
+        RequirementDesign design = requirementDesignMapper.selectOne(wrapper);
+        if (design == null) {
+            design = new RequirementDesign();
+            design.setRequirementId(requirementId);
+            design.setCreatedAt(LocalDateTime.now());
+        }
+
+        design.setPrototypeStatus(resolveStatus(logs, PROTOTYPE));
+        design.setUiStatus(resolveStatus(logs, UI));
+        design.setTechSolutionStatus(resolveStatus(logs, TECH));
+        design.setUpdatedAt(LocalDateTime.now());
+
+        boolean allCompleted = logs.stream().allMatch(log -> "已完成".equals(log.getStatus()));
+        if (allCompleted) {
+            design.setAllCompletedAt(LocalDateTime.now());
+            if ("设计中".equals(requirement.getStatus())) {
+                requirement.setStatus("待确认");
+                requirement.setUpdatedAt(LocalDateTime.now());
+                requirementMapper.updateById(requirement);
+            }
+        } else {
+            design.setAllCompletedAt(null);
+        }
+
+        if (design.getId() == null) {
+            requirementDesignMapper.insert(design);
+        } else {
+            requirementDesignMapper.updateById(design);
+        }
+    }
+
+    private String resolveStatus(List<DesignWorkLog> logs, String workType) {
+        return logs.stream()
+                .filter(log -> workType.equals(log.getWorkType()))
+                .findFirst()
+                .map(log -> switch (log.getStatus()) {
+                    case "进行中" -> "进行中";
+                    case "已完成" -> "已完成";
+                    default -> "未开始";
+                })
+                .orElse("已完成");
     }
 }

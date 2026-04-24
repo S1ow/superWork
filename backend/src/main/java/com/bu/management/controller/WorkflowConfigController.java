@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/workflow-configs")
@@ -76,5 +77,12 @@ public class WorkflowConfigController {
             @Parameter(description = "需求类型") @RequestParam String requirementType,
             @Parameter(description = "当前状态") @RequestParam String currentStatus) {
         return Result.success(workflowConfigService.getNextStatuses(requirementType, currentStatus));
+    }
+
+    @Operation(summary = "获取工作流状态选项", description = "获取每种需求类型可配置的全部状态")
+    @GetMapping("/meta/status-options")
+    @RequirePermission({"system:workflow:list"})
+    public Result<Map<String, List<String>>> getStatusOptions() {
+        return Result.success(workflowConfigService.getStatusOptions());
     }
 }

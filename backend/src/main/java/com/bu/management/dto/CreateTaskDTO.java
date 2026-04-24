@@ -34,6 +34,16 @@ public class CreateTaskDTO {
     private Long assigneeId;
 
     /**
+     * 任务类型：前端开发/后端开发/测试/UI设计/开发任务
+     */
+    private String taskType;
+
+    /**
+     * 创建人ID
+     */
+    private Long createdBy;
+
+    /**
      * 预估工时
      */
     private BigDecimal estimatedHours;

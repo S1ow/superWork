@@ -5,8 +5,10 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.bu.management.dto.ProjectRequest;
 import com.bu.management.entity.BusinessLine;
 import com.bu.management.entity.Project;
+import com.bu.management.entity.User;
 import com.bu.management.mapper.BusinessLineMapper;
 import com.bu.management.mapper.ProjectMapper;
+import com.bu.management.mapper.UserMapper;
 import com.bu.management.vo.ProjectTreeNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.BeanUtils;
@@ -31,6 +33,7 @@ public class ProjectService {
 
     private final ProjectMapper projectMapper;
     private final BusinessLineMapper businessLineMapper;
+    private final UserMapper userMapper;
 
     /**
      * 创建项目
@@ -63,6 +66,8 @@ public class ProjectService {
                 throw new RuntimeException("项目编码已存在");
             }
         }
+
+        validateProjectManager(request.getManagerId());
 
         Project project = new Project();
         project.setBusinessLineId(request.getBusinessLineId());
@@ -108,6 +113,8 @@ public class ProjectService {
                 throw new RuntimeException("项目编码已存在");
             }
         }
+
+        validateProjectManager(request.getManagerId());
 
         project.setBusinessLineId(request.getBusinessLineId());
         project.setName(request.getName());
@@ -259,5 +266,20 @@ public class ProjectService {
         ProjectTreeNode node = new ProjectTreeNode();
         BeanUtils.copyProperties(project, node);
         return node;
+    }
+
+    private void validateProjectManager(Long managerId) {
+        if (managerId == null) {
+            return;
+        }
+
+        User manager = userMapper.selectById(managerId);
+        if (manager == null) {
+            throw new RuntimeException("项目经理不存在");
+        }
+
+        if (!"PM".equals(manager.getRole())) {
+            throw new RuntimeException("项目经理必须选择项目经理角色用户");
+        }
     }
 }

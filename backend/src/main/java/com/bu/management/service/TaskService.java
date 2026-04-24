@@ -11,6 +11,7 @@ import com.bu.management.mapper.TaskMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -45,8 +46,10 @@ public class TaskService {
         task.setTitle(dto.getTitle());
         task.setDescription(dto.getDescription());
         task.setAssigneeId(dto.getAssigneeId());
+        task.setTaskType(resolveTaskType(dto.getTaskType()));
         task.setEstimatedHours(dto.getEstimatedHours());
         task.setStatus("待开始");
+        task.setCreatedBy(resolveCreatedBy(dto));
         task.setCreatedAt(LocalDateTime.now());
         task.setUpdatedAt(LocalDateTime.now());
 
@@ -132,5 +135,19 @@ public class TaskService {
     @Transactional
     public void deleteTask(Long id) {
         taskMapper.deleteById(id);
+    }
+
+    private String resolveTaskType(String taskType) {
+        return StringUtils.hasText(taskType) ? taskType.trim() : "开发任务";
+    }
+
+    private Long resolveCreatedBy(CreateTaskDTO dto) {
+        if (dto.getCreatedBy() != null) {
+            return dto.getCreatedBy();
+        }
+        if (dto.getAssigneeId() != null) {
+            return dto.getAssigneeId();
+        }
+        return 1L;
     }
 }

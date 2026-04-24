@@ -3,6 +3,7 @@ package com.bu.management.controller;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.bu.management.annotation.RequirePermission;
 import com.bu.management.dto.RequirementRequest;
+import com.bu.management.dto.RequirementStageActionRequest;
 import com.bu.management.entity.Requirement;
 import com.bu.management.service.RequirementService;
 import com.bu.management.vo.Result;
@@ -54,6 +55,16 @@ public class RequirementController {
             @Valid @RequestBody RequirementRequest request) {
         Requirement requirement = requirementService.update(id, request);
         return Result.success("更新成功", requirement);
+    }
+
+    @Operation(summary = "执行需求阶段动作", description = "执行需求阶段管理中的简单状态切换动作")
+    @PostMapping("/{id}/stage-actions")
+    @RequirePermission({"requirement:edit"})
+    public Result<Requirement> executeStageAction(
+            @Parameter(description = "需求ID") @PathVariable Long id,
+            @Valid @RequestBody RequirementStageActionRequest request) {
+        Requirement requirement = requirementService.executeStageAction(id, request.getAction());
+        return Result.success("操作成功", requirement);
     }
 
     /**

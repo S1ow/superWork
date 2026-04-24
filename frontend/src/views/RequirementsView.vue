@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, computed, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import RequirementDesignPlannerDialog from '@/components/RequirementDesignPlannerDialog.vue'
 import type { Requirement } from '@/types/requirement'
 import { api } from '@/utils/api'
+import { getRequirementStageActions } from '@/utils/requirement-stage'
 
 const viewMode = ref<'table' | 'kanban'>('table')
 const showCreateModal = ref(false)
@@ -9,6 +12,10 @@ const showDetailDrawer = ref(false)
 const showEvaluationModal = ref(false)
 const currentRequirement = ref<Requirement | null>(null)
 const loading = ref(false)
+const actionLoading = ref('')
+const showDesignPlanner = ref(false)
+const plannerRequirement = ref<Requirement | null>(null)
+const plannerPlans = ref<any[]>([])
 
 const evaluationForm = reactive({
   isFeasible: true,
@@ -17,6 +24,16 @@ const evaluationForm = reactive({
   estimatedOnlineDate: ''
 })
 
+const getStoredUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem('user') || '{}')
+  } catch {
+    return {}
+  }
+}
+
+const currentUserId = computed(() => Number(getStoredUser()?.id) || 1)
+
 const newRequirement = reactive({
   title: '',
   businessLine: '',
@@ -24,6 +41,7 @@ const newRequirement = reactive({
   subProject: '',
   source: '内部',
   requester: '',
+  customerContactId: undefined as number | undefined,
   type: '产品需求',
   priority: '中',
   expectDate: '',
@@ -31,7 +49,34 @@ const newRequirement = reactive({
   description: ''
 })
 
+// 客户联系人列表（项目需求必填）
+const customerContacts = ref<any[]>([])
+const loadingContacts = ref(false)
+
+// 当项目或类型变化时，加载对应项目的客户联系人
+const loadCustomerContacts = async (projectId: number | undefined) => {
+  if (!projectId) {
+    customerContacts.value = []
+    return
+  }
+  loadingContacts.value = true
+  try {
+    const data = await api.getCustomerContacts(projectId)
+    customerContacts.value = data
+  } catch (error) {
+    console.error('加载客户联系人失败:', error)
+    customerContacts.value = []
+  } finally {
+    loadingContacts.value = false
+  }
+}
+
 const editorRef = ref<HTMLElement | null>(null)
+
+// 用户列表（负责人下拉）
+const allUsers = ref<any[]>([])
+const isProjectRequirement = computed(() => newRequirement.type === '项目需求')
+const actorFieldLabel = computed(() => isProjectRequirement.value ? '客户信息' : '提出人')
 
 // 弹窗内项目选择
 const modalProjects = computed(() => {
@@ -123,55 +168,97 @@ const handleClickOutside = (e: MouseEvent) => {
   }
 }
 
+// 从API响应中提取数据数组（兼容分页格式和直接数组）
+const extractRecords = (resp: any): any[] => {
+  if (Array.isArray(resp)) return resp
+  if (resp?.records) return resp.records
+  if (resp?.data?.records) return resp.data.records
+  return []
+}
+
+// 保存原始数据用于创建需求时查找ID
+const rawBusinessLines = ref<any[]>([])
+const rawProjects = ref<any[]>([])
+
 // 加载数据
 const loadData = async () => {
   loading.value = true
   try {
-    // 加载业务线和项目
-    const businessLineData = await api.getBusinessLines()
-    const projectsData = await api.getProjects()
+    // 并行加载业务线、项目、用户、需求
+    const [businessLineResp, projectsResp, usersResp, requirementsResp] = await Promise.all([
+      api.getBusinessLines({ size: 999 }),
+      api.getProjects({ size: 999 }),
+      api.getUsers({ size: 100 }),
+      api.getRequirements({ size: 999 })
+    ])
 
-    // 转换业务线数据
-    businessLines.value = businessLineData.map((bl: any) => ({
-      name: bl.name,
-      totalCount: projectsData.filter((p: any) => p.businessLineId === bl.id).length,
-      projects: projectsData
-        .filter((p: any) => p.businessLineId === bl.id && !p.parentId)
-        .map((p: any) => ({
-          name: p.name,
-          logo: getProjectLogo(p.name),
-          count: projectsData.filter((sp: any) => sp.parentId === p.id).length,
-          subProjects: projectsData
-            .filter((sp: any) => sp.parentId === p.id)
-            .map((sp: any) => sp.name)
-        }))
-    }))
+    const businessLineData = extractRecords(businessLineResp)
+    const projectsData = extractRecords(projectsResp)
+    allUsers.value = extractRecords(usersResp)
+    const requirementsData = extractRecords(requirementsResp)
 
-    // 加载需求列表
-    const requirementsData = await api.getRequirements()
-    tableData.value = requirementsData.records.map((req: any) => ({
+    // 保存原始数据
+    rawBusinessLines.value = businessLineData
+    rawProjects.value = projectsData
+
+    // 先构建需求列表（通过 parentId 推导主项目/子项目关系）
+    tableData.value = requirementsData.map((req: any) => {
+      const reqProject = projectsData.find((p: any) => p.id === req.projectId)
+      const isSubProject = reqProject?.parentId != null
+      const mainProject = isSubProject
+        ? projectsData.find((p: any) => p.id === reqProject.parentId)
+        : reqProject
+      return {
       id: String(req.id),
-      reqNo: req.reqNo,
+      reqNo: req.reqNo || '',
       title: req.title,
-      project: projectsData.find((p: any) => p.id === req.projectId)?.name || '',
-      subProject: '',
+      project: mainProject?.name || reqProject?.name || '',
+      subProject: isSubProject ? (reqProject?.name || '') : '',
       businessLine: businessLineData.find((bl: any) => bl.id === req.businessLineId)?.name || '',
       type: req.type,
       status: req.status,
       statusClass: getStatusClass(req.status),
       priority: req.priority,
       priorityClass: getPriorityClass(req.priority),
-      owner: req.creatorName || '',
-      createdAt: req.createdAt?.split('T')[0] || '',
+      owner: req.ownerName || req.creatorName || (allUsers.value.find((u: any) => u.id === req.creatorId)?.realName) || '',
+      createdAt: req.createdAt?.split('T')[0] || req.createTime?.split('T')[0] || '',
       source: req.source || '内部',
-      requester: req.customerContactName || '',
-      expectDate: req.expectedOnlineDate || '',
+      requester: req.customerContactName || req.requester || '',
+      expectDate: req.expectedOnlineDate || req.expectDate || '',
       description: req.description || '',
       attachments: [],
       logs: [],
       evaluation: undefined,
       designWorks: [],
       tasks: []
+      }
+    })
+
+    // 转换业务线数据，使用需求数量（而非项目数量）
+    businessLines.value = businessLineData.map((bl: any) => ({
+      id: bl.id,
+      name: bl.name,
+      totalCount: requirementsData.filter((r: any) => r.businessLineId === bl.id).length,
+      projects: projectsData
+        .filter((p: any) => p.businessLineId === bl.id && !p.parentId)
+        .map((p: any) => {
+          const subProjects = projectsData.filter((sp: any) => sp.parentId === p.id)
+          const subProjectIds = subProjects.map((sp: any) => sp.id)
+          const reqCount = requirementsData.filter((r: any) =>
+            r.projectId === p.id || subProjectIds.includes(r.projectId)
+          ).length
+          return {
+            id: p.id,
+            name: p.name,
+            logo: getProjectLogo(p.name),
+            count: reqCount,
+            subProjects: subProjects.map((sp: any) => ({
+              id: sp.id,
+              name: sp.name,
+              count: requirementsData.filter((r: any) => r.projectId === sp.id).length
+            }))
+          }
+        })
     }))
   } catch (error) {
     console.error('加载数据失败:', error)
@@ -253,7 +340,8 @@ const filteredData = computed(() => {
 
     if (selectedBusiness.value && item.businessLine !== selectedBusiness.value) return false
     if (selectedProjects.value.length > 0 && !selectedProjects.value.includes(item.project)) return false
-    if (selectedSubProjects.value.length > 0 && item.subProject && !selectedSubProjects.value.includes(item.subProject)) return false
+    // 选中子项目时，只显示属于该子项目的需求（不再让无子项目的需求通过）
+    if (selectedSubProjects.value.length > 0 && !(item.subProject && selectedSubProjects.value.includes(item.subProject))) return false
 
     return true
   })
@@ -358,8 +446,8 @@ const handleRowClick = (id: string) => {
 }
 
 const handleRowDoubleClick = (id: string) => {
-  // 双击 - 打开新窗口
-  window.open(`/requirements/${id}`, '_blank')
+  // 双击 - 打开独立页面（无左侧菜单）
+  window.open(`/requirements-standalone/${id}`, '_blank')
 }
 
 const goToDetail = (id: string) => {
@@ -372,7 +460,7 @@ const goToDetail = (id: string) => {
 
 const openInNewPage = () => {
   if (currentRequirement.value) {
-    window.open(`/requirements/${currentRequirement.value.id}`, '_blank')
+    window.open(`/requirements-standalone/${currentRequirement.value.id}`, '_blank')
   }
 }
 
@@ -412,103 +500,303 @@ const isStepCompleted = (stepStatus: string) => {
 }
 
 const getCurrentActions = () => {
-  const status = currentRequirement.value?.status
-  const type = currentRequirement.value?.type
-  const actions: { type: string; label: string; class: string }[] = []
+  return getRequirementStageActions({
+    status: currentRequirement.value?.status,
+    type: currentRequirement.value?.type,
+    hasEvaluation: currentRequirement.value?.status === '评估中'
+  })
+}
 
-  switch (status) {
-    case '待评估':
-      actions.push({ type: 'start_eval', label: '开始评估', class: 'primary' }, { type: 'reject', label: '标记已拒绝', class: 'danger' })
-      break
-    case '评估中':
-      actions.push({ type: 'submit_eval', label: '提交评估', class: 'primary' }, { type: 'reject', label: '标记已拒绝', class: 'danger' })
-      break
-    case '待设计':
-      if (type === '项目需求') {
-        actions.push({ type: 'start_design', label: '开始设计', class: 'primary' }, { type: 'convert', label: '转为产品需求', class: 'secondary' })
+const executeAction = (_type: string) => {
+  if (!currentRequirement.value) return
+
+  const targetUrl = `/requirements-standalone/${currentRequirement.value.id}`
+  window.open(targetUrl, '_blank')
+}
+
+const openStandaloneDetail = (id: string) => {
+  window.open(`/requirements-standalone/${id}`, '_blank')
+}
+
+const getRowActions = (item: Requirement) => getRequirementStageActions({
+  status: item.status,
+  type: item.type,
+  hasEvaluation: item.status === '评估中'
+})
+
+const withRowAction = async (key: string, runner: () => Promise<void>) => {
+  actionLoading.value = key
+  try {
+    await runner()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '操作失败，请重试')
+  } finally {
+    actionLoading.value = ''
+  }
+}
+
+const isActionBusy = (itemId: string, actionType: string) => {
+  return actionLoading.value === `${actionType}-${itemId}`
+    || actionLoading.value === `plan-${itemId}`
+    || actionLoading.value === `eval-${itemId}`
+    || actionLoading.value === `task-${itemId}`
+    || actionLoading.value === `confirm-${itemId}`
+    || actionLoading.value === `deliver-${itemId}`
+    || actionLoading.value === `accept-${itemId}`
+}
+
+const confirmRowAction = async (message: string) => {
+  try {
+    await ElMessageBox.confirm(message, '提示', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const openDesignPlannerForRequirement = async (item: Requirement) => {
+  plannerRequirement.value = item
+  try {
+    plannerPlans.value = await api.getDesignWorkLogs(Number(item.id))
+  } catch {
+    plannerPlans.value = []
+  }
+  showDesignPlanner.value = true
+}
+
+const saveDesignPlanner = async (items: Array<{
+  workType: string
+  designerId: number
+  estimatedHours?: number
+  plannedCompletedAt?: string
+}>) => {
+  if (!plannerRequirement.value) return
+  const requirementId = Number(plannerRequirement.value.id)
+
+  await withRowAction(`plan-${plannerRequirement.value.id}`, async () => {
+    const existingByType = new Map((plannerPlans.value || []).map((log: any) => [log.workType, log]))
+    const selectedTypes = new Set(items.map(item => item.workType))
+
+    for (const item of items) {
+      const existing = existingByType.get(item.workType)
+      if (existing) {
+        await api.updateDesignWorkLog(existing.id, {
+          designerId: item.designerId,
+          estimatedHours: item.estimatedHours,
+          plannedCompletedAt: item.plannedCompletedAt,
+          status: existing.status || '待开始'
+        })
       } else {
-        actions.push({ type: 'start_design', label: '开始设计', class: 'primary' })
+        await api.createDesignWorkLog({
+          requirementId,
+          workType: item.workType,
+          designerId: item.designerId,
+          estimatedHours: item.estimatedHours,
+          plannedCompletedAt: item.plannedCompletedAt,
+          status: '待开始'
+        })
       }
-      break
-    case '设计中':
-      actions.push({ type: 'add_design', label: '添设计工作', class: 'secondary' }, { type: 'confirm', label: '确认完成', class: 'primary' })
-      break
-    case '待确认':
-      actions.push({ type: 'customer_confirm', label: '客户确认', class: 'primary' }, { type: 'internal_confirm', label: '内部确认', class: 'secondary' })
-      break
-    case '开发中':
-      actions.push({ type: 'add_task', label: '添加任务', class: 'secondary' }, { type: 'start_test', label: '提测', class: 'primary' })
-      break
-    case '测试中':
-      actions.push({ type: 'test_pass', label: '测试通过', class: 'primary' }, { type: 'test_fail', label: '测试失败', class: 'danger' })
-      break
-    case '待上线':
-      actions.push({ type: 'go_online', label: '确认上线', class: 'primary' })
-      break
-    case '已上线':
-      if (type === '项目需求') {
-        actions.push({ type: 'deliver', label: '确认交付', class: 'primary' })
+    }
+
+    for (const log of plannerPlans.value || []) {
+      if (!selectedTypes.has(log.workType)) {
+        await api.deleteDesignWorkLog(log.id)
       }
-      break
-    case '已交付':
-      if (type === '项目需求') {
-        actions.push({ type: 'accept', label: '确认验收', class: 'primary' })
-      }
-      break
-  }
-  return actions
+    }
+
+    showDesignPlanner.value = false
+    plannerRequirement.value = null
+    plannerPlans.value = []
+    await loadData()
+    ElMessage.success('设计规划已保存')
+  })
 }
 
-const executeAction = (type: string) => {
-  if (type === 'submit_eval') {
-    evaluationForm.isFeasible = true
-    evaluationForm.estimatedWorkload = ''
-    evaluationForm.estimatedCost = ''
-    evaluationForm.estimatedOnlineDate = ''
-    showEvaluationModal.value = true
-    return
-  }
-  alert(`执行操作: ${type}`)
+const runSimpleStageAction = async (item: Requirement, action: string, message: string, success: string) => {
+  if (!await confirmRowAction(message)) return
+  await withRowAction(`${action}-${item.id}`, async () => {
+    await api.executeRequirementStageAction(Number(item.id), action)
+    await loadData()
+    ElMessage.success(success)
+  })
 }
 
-const submitEvaluation = () => {
+const runBuDecision = async (item: Requirement, decision: string, success: string) => {
+  if ((decision === '通过' || decision === '转产品需求') && item.status === '评估中') {
+    const existingPlans = await api.getDesignWorkLogs(Number(item.id)).catch(() => [])
+    if (!existingPlans.length) {
+      await openDesignPlannerForRequirement(item)
+      ElMessage.warning('请先配置设计规划')
+      return
+    }
+  }
+
+  if (!await confirmRowAction(`确认执行“${decision}”吗？`)) return
+  await withRowAction(`${decision}-${item.id}`, async () => {
+    await api.submitBuDecision({ requirementId: Number(item.id), decision, decisionReason: '' })
+    await loadData()
+    ElMessage.success(success)
+  })
+}
+
+const runAddTask = async (item: Requirement) => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入任务标题', '添加任务', {
+      confirmButtonText: '创建',
+      cancelButtonText: '取消',
+      inputPlaceholder: '例如：联调订单接口'
+    })
+    if (!value?.trim()) return
+
+    await withRowAction(`task-${item.id}`, async () => {
+      await api.createTask({
+        requirementId: Number(item.id),
+        title: value.trim(),
+        assigneeId: currentUserId.value,
+        createdBy: currentUserId.value,
+        taskType: '开发任务'
+      })
+      await loadData()
+      ElMessage.success('任务已创建')
+    })
+  } catch {
+    // 用户取消
+  }
+}
+
+const executeRowAction = async (item: Requirement, action: string) => {
+  currentRequirement.value = item
+
+  switch (action) {
+    case 'submit_eval':
+      evaluationForm.isFeasible = true
+      evaluationForm.estimatedWorkload = ''
+      evaluationForm.estimatedCost = ''
+      evaluationForm.estimatedOnlineDate = ''
+      showEvaluationModal.value = true
+      return
+    case 'plan_design':
+      await openDesignPlannerForRequirement(item)
+      return
+    case 'start_eval':
+      await runSimpleStageAction(item, action, '确认开始评估吗？', '需求已进入评估中')
+      return
+    case 'reject':
+      if (item.status === '评估中') {
+        await runBuDecision(item, '拒绝', '需求已标记为已拒绝')
+        return
+      }
+      await runSimpleStageAction(item, action, '确认标记为已拒绝吗？', '需求已标记为已拒绝')
+      return
+    case 'approve':
+      await runBuDecision(item, '通过', '评估通过，需求已进入待设计')
+      return
+    case 'convert':
+      await runBuDecision(item, '转产品需求', '需求已转为产品需求并进入待设计')
+      return
+    case 'start_design': {
+      const existingPlans = await api.getDesignWorkLogs(Number(item.id)).catch(() => [])
+      if (!existingPlans.length) {
+        await openDesignPlannerForRequirement(item)
+        ElMessage.warning('请先配置设计规划')
+        return
+      }
+      await runSimpleStageAction(item, action, '确认进入设计阶段吗？', '已进入设计中')
+      return
+    }
+    case 'customer_confirm':
+      await withRowAction(`confirm-${item.id}`, async () => {
+        await api.createRequirementConfirmation({
+          requirementId: Number(item.id),
+          confirmationType: '客户确认',
+          confirmedBy: currentUserId.value,
+          confirmationNotes: ''
+        })
+        await loadData()
+        ElMessage.success('客户确认完成')
+      })
+      return
+    case 'internal_confirm':
+      await withRowAction(`confirm-${item.id}`, async () => {
+        await api.createRequirementConfirmation({
+          requirementId: Number(item.id),
+          confirmationType: '内部确认',
+          confirmedBy: currentUserId.value,
+          confirmationNotes: ''
+        })
+        await loadData()
+        ElMessage.success('内部确认完成')
+      })
+      return
+    case 'add_task':
+      await runAddTask(item)
+      return
+    case 'start_test':
+      await runSimpleStageAction(item, action, '确认提测吗？', '需求已进入测试中')
+      return
+    case 'test_pass':
+      await runSimpleStageAction(item, action, '确认测试通过吗？', '测试通过，需求已进入待上线')
+      return
+    case 'test_fail':
+      await runSimpleStageAction(item, action, '确认测试失败并退回开发吗？', '需求已退回开发中')
+      return
+    case 'go_online':
+      await runSimpleStageAction(item, action, '确认上线吗？', '需求已确认上线')
+      return
+    case 'deliver':
+      await withRowAction(`deliver-${item.id}`, async () => {
+        await api.createRequirementDelivery({
+          requirementId: Number(item.id),
+          deliveredBy: currentUserId.value,
+          deliveryNotes: ''
+        })
+        await loadData()
+        ElMessage.success('已完成交付')
+      })
+      return
+    case 'accept':
+      await withRowAction(`accept-${item.id}`, async () => {
+        await api.acceptRequirementDelivery(Number(item.id), {
+          acceptedBy: currentUserId.value,
+          acceptanceNotes: ''
+        })
+        await loadData()
+        ElMessage.success('已完成验收')
+      })
+      return
+  }
+}
+
+const submitEvaluation = async () => {
+  if (!currentRequirement.value) return
   if (!evaluationForm.estimatedWorkload) {
-    alert('请输入预估工时')
+    ElMessage.warning('请输入预估工时')
     return
   }
-  if (!evaluationForm.estimatedOnlineDate) {
-    alert('请选择预估上线时间')
-    return
-  }
-
-  if (currentRequirement.value && currentRequirement.value.type === '项目需求' && !evaluationForm.estimatedCost) {
-    alert('项目需求请输入预估报价')
+  if (currentRequirement.value.type === '项目需求' && !evaluationForm.estimatedCost) {
+    ElMessage.warning('项目需求请输入预估报价')
     return
   }
 
-  currentRequirement.value!.evaluation = {
-    isFeasible: evaluationForm.isFeasible,
-    estimatedWorkload: evaluationForm.estimatedWorkload + '人天',
-    estimatedCost: evaluationForm.estimatedCost ? '¥' + evaluationForm.estimatedCost : undefined,
-    estimatedOnlineDate: evaluationForm.estimatedOnlineDate,
-    evaluator: '当前用户'
-  }
-
-  const newLog = {
-    id: String((currentRequirement.value?.logs?.length || 0) + 1),
-    action: `评估信息已更新 - 预估工时：${evaluationForm.estimatedWorkload}人天`,
-    user: '当前用户',
-    time: new Date().toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(/\//g, '-')
-  }
-  if (currentRequirement.value?.logs) {
-    currentRequirement.value.logs.unshift(newLog)
-  }
-
-  showEvaluationModal.value = false
-  alert('评估信息已提交')
+  await withRowAction(`eval-${currentRequirement.value.id}`, async () => {
+    await api.submitRequirementEvaluation({
+      requirementId: Number(currentRequirement.value!.id),
+      isFeasible: evaluationForm.isFeasible ? 1 : 0,
+      estimatedWorkload: Number(evaluationForm.estimatedWorkload),
+      estimatedCost: currentRequirement.value!.type === '项目需求' ? Number(evaluationForm.estimatedCost) : undefined,
+      suggestProduct: 0
+    })
+    showEvaluationModal.value = false
+    await loadData()
+    ElMessage.success('评估已提交')
+  })
 }
 
-const createRequirement = () => {
+const createRequirement = async () => {
   if (!newRequirement.title) {
     alert('请输入需求标题')
     return
@@ -518,51 +806,80 @@ const createRequirement = () => {
     return
   }
 
-  const reqNo = 'REQ' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + String(tableData.value.length + 1).padStart(3, '0')
-  const newReq: Requirement = {
-    id: String(Date.now()),
-    reqNo,
-    title: newRequirement.title,
-    project: newRequirement.project,
-    subProject: newRequirement.subProject,
-    businessLine: newRequirement.businessLine || '全渠道云鹿定制',
-    type: newRequirement.type as '产品需求' | '项目需求',
-    status: '待评估',
-    statusClass: 'pending',
-    priority: newRequirement.priority as '高' | '中' | '低',
-    priorityClass: newRequirement.priority === '高' ? 'high' : newRequirement.priority === '中' ? 'medium' : 'low',
-    owner: newRequirement.owner || '未分配',
-    createdAt: new Date().toISOString().slice(0, 10),
-    source: newRequirement.source as '内部' | '外部',
-    requester: newRequirement.requester,
-    expectDate: newRequirement.expectDate,
-    description: newRequirement.description || '',
-    attachments: [],
-    logs: [{ id: '1', action: '需求已创建', user: '当前用户', time: new Date().toLocaleString('zh-CN') }],
-    evaluation: undefined,
-    designWorks: [],
-    tasks: []
-  }
+  try {
+    // 查找项目ID和业务线ID
+    const project = rawProjects.value.find((p: any) => p.name === newRequirement.project)
+    const bl = rawBusinessLines.value.find((b: any) => b.name === newRequirement.businessLine)
+    const subProject = newRequirement.subProject
+      ? rawProjects.value.find((p: any) => p.name === newRequirement.subProject)
+      : null
 
-  tableData.value.unshift(newReq)
-  showCreateModal.value = false
+    // 项目需求验证客户联系人
+    if (newRequirement.type === '项目需求' && !newRequirement.customerContactId) {
+      alert('项目需求必须选择客户联系人')
+      return
+    }
 
-  // 重置表单
-  newRequirement.title = ''
-  newRequirement.businessLine = ''
-  newRequirement.project = ''
-  newRequirement.subProject = ''
-  newRequirement.source = '内部'
-  newRequirement.requester = ''
-  newRequirement.type = '产品需求'
-  newRequirement.priority = '中'
-  newRequirement.expectDate = ''
-  newRequirement.owner = ''
-  newRequirement.description = ''
-  if (editorRef.value) {
-    editorRef.value.innerHTML = ''
+    // 调用后端API创建需求
+    const apiData: any = {
+      title: newRequirement.title,
+      type: newRequirement.type,
+      priority: newRequirement.priority,
+      status: '待评估',
+      source: newRequirement.source,
+      description: newRequirement.description || (editorRef.value?.innerHTML || ''),
+      projectId: subProject?.id || project?.id || null,
+      businessLineId: bl?.id || project?.businessLineId || null,
+      expectedOnlineDate: newRequirement.expectDate || null,
+      customerContactId: newRequirement.type === '项目需求' ? newRequirement.customerContactId : null
+    }
+
+    await api.createRequirement(apiData)
+
+    showCreateModal.value = false
+
+    // 重置表单
+    newRequirement.title = ''
+    newRequirement.businessLine = ''
+    newRequirement.project = ''
+    newRequirement.subProject = ''
+    newRequirement.source = '内部'
+    newRequirement.requester = ''
+    newRequirement.customerContactId = undefined
+    newRequirement.type = '产品需求'
+    newRequirement.priority = '中'
+    newRequirement.expectDate = ''
+    newRequirement.owner = ''
+    newRequirement.description = ''
+    customerContacts.value = []
+    if (editorRef.value) {
+      editorRef.value.innerHTML = ''
+    }
+
+    // 重新加载数据以显示新创建的需求
+    await loadData()
+  } catch (error) {
+    console.error('创建需求失败:', error)
+    alert('创建需求失败，请重试')
   }
 }
+
+watch(
+  () => newRequirement.type,
+  async type => {
+    if (type === '项目需求') {
+      newRequirement.requester = ''
+      if (newRequirement.project) {
+        const project = rawProjects.value.find((item: any) => item.name === newRequirement.project)
+        await loadCustomerContacts(project?.id)
+      }
+      return
+    }
+
+    newRequirement.customerContactId = undefined
+    customerContacts.value = []
+  }
+)
 
 const getStatusBadgeClass = (status: string) => {
   const map: Record<string, string> = {
@@ -704,8 +1021,8 @@ const getStatusBadgeClass = (status: string) => {
               <span class="project-card-count">({{ project.count }})</span>
             </span>
             <div class="project-card-sub" v-if="project.subProjects && project.subProjects.length">
-              <span v-for="sub in project.subProjects" :key="sub" class="sub-tag" :class="{ selected: selectedSubProjects.includes(sub) }" @click.stop="toggleSubProject(sub)">
-                {{ sub }}
+              <span v-for="sub in project.subProjects" :key="sub.id || sub.name" class="sub-tag" :class="{ selected: selectedSubProjects.includes(sub.name) }" @click.stop="toggleSubProject(sub.name)">
+                {{ sub.name }}
               </span>
             </div>
           </div>
@@ -726,6 +1043,7 @@ const getStatusBadgeClass = (status: string) => {
             <th style="width: 70px">优先级</th>
             <th style="width: 80px">负责人</th>
             <th style="width: 100px">更新时间</th>
+            <th style="width: 240px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -741,6 +1059,20 @@ const getStatusBadgeClass = (status: string) => {
             <td style="white-space: nowrap;"><span :class="['priority-text', item.priorityClass]">{{ item.priority }}</span></td>
             <td style="font-size: 13px;">{{ item.owner }}</td>
             <td style="font-size: 13px;">{{ item.createdAt }}</td>
+            <td>
+              <div class="row-action-bar" @click.stop>
+                <button class="mini-link" @click.stop="openStandaloneDetail(item.id)">详情</button>
+                <button
+                  v-for="action in getRowActions(item)"
+                  :key="`${item.id}-${action.type}`"
+                  :class="['row-action-btn', action.class]"
+                  :disabled="isActionBusy(item.id, action.type)"
+                  @click.stop="executeRowAction(item, action.type)"
+                >
+                  {{ action.label }}
+                </button>
+              </div>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -806,18 +1138,18 @@ const getStatusBadgeClass = (status: string) => {
                     :key="project.name"
                     class="project-card-modal"
                     :class="{ selected: newRequirement.project === project.name }"
-                    @click="newRequirement.project = project.name; newRequirement.subProject = ''"
+                    @click="newRequirement.project = project.name; newRequirement.subProject = ''; newRequirement.customerContactId = undefined; loadCustomerContacts(project.id)"
                   >
                     <span class="project-name">{{ project.name }}</span>
                     <span v-if="project.subProjects && project.subProjects.length" class="sub-count">{{ project.subProjects.length }}个子项目</span>
                     <div v-if="project.subProjects && project.subProjects.length && newRequirement.project === project.name" class="sub-tags-modal">
                       <span
                         v-for="sub in project.subProjects"
-                        :key="sub"
+                        :key="sub.id || sub.name"
                         class="sub-tag-modal"
-                        :class="{ selected: newRequirement.subProject === sub }"
-                        @click.stop="newRequirement.subProject = newRequirement.subProject === sub ? '' : sub"
-                      >{{ sub }}</span>
+                        :class="{ selected: newRequirement.subProject === sub.name }"
+                        @click.stop="newRequirement.subProject = newRequirement.subProject === sub.name ? '' : sub.name"
+                      >{{ sub.name }}</span>
                     </div>
                   </div>
                 </div>
@@ -848,6 +1180,20 @@ const getStatusBadgeClass = (status: string) => {
 
           <!-- 右侧属性 -->
           <div class="form-right">
+            <div class="form-group spotlight-group">
+              <label class="form-label">需求类型 <span class="required">*</span></label>
+              <div class="radio-group vertical">
+                <label class="radio-item" :class="{ active: newRequirement.type === '产品需求' }">
+                  <input type="radio" v-model="newRequirement.type" value="产品需求">
+                  <span>产品需求</span>
+                </label>
+                <label class="radio-item" :class="{ active: newRequirement.type === '项目需求' }">
+                  <input type="radio" v-model="newRequirement.type" value="项目需求">
+                  <span>项目需求</span>
+                </label>
+              </div>
+            </div>
+
             <div class="form-group">
               <label class="form-label">需求来源</label>
               <div class="radio-group">
@@ -863,22 +1209,17 @@ const getStatusBadgeClass = (status: string) => {
             </div>
 
             <div class="form-group">
-              <label class="form-label">提出人</label>
-              <input type="text" class="form-input" v-model="newRequirement.requester" placeholder="请输入提出人">
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">需求类型 <span class="required">*</span></label>
-              <div class="radio-group vertical">
-                <label class="radio-item" :class="{ active: newRequirement.type === '产品需求' }">
-                  <input type="radio" v-model="newRequirement.type" value="产品需求">
-                  <span>产品需求</span>
-                </label>
-                <label class="radio-item" :class="{ active: newRequirement.type === '项目需求' }">
-                  <input type="radio" v-model="newRequirement.type" value="项目需求">
-                  <span>项目需求</span>
-                </label>
-              </div>
+              <label class="form-label">{{ actorFieldLabel }} <span v-if="isProjectRequirement" class="required">*</span></label>
+              <template v-if="isProjectRequirement">
+                <div class="field-shell select-shell">
+                  <select class="form-select polished-select" v-model="newRequirement.customerContactId">
+                    <option :value="undefined">请选择客户信息</option>
+                    <option v-for="c in customerContacts" :key="c.id" :value="c.id">{{ c.name }}{{ c.company ? ` - ${c.company}` : '' }}</option>
+                  </select>
+                </div>
+                <span v-if="customerContacts.length === 0 && !loadingContacts" class="form-tip">该项目暂无客户联系人，请先在系统中添加</span>
+              </template>
+              <input v-else type="text" class="form-input polished-input" v-model="newRequirement.requester" placeholder="请输入提出人">
             </div>
 
             <div class="form-group">
@@ -901,32 +1242,21 @@ const getStatusBadgeClass = (status: string) => {
 
             <div class="form-group">
               <label class="form-label">期望上线时间</label>
-              <input type="date" class="form-input" v-model="newRequirement.expectDate">
+              <div class="field-shell date-shell">
+                <input type="date" class="form-input polished-input date-input" v-model="newRequirement.expectDate">
+              </div>
             </div>
 
             <div class="form-group">
               <label class="form-label">负责人</label>
-              <select class="form-select" v-model="newRequirement.owner">
-                <option value="">请选择</option>
-                <option value="张三">张三</option>
-                <option value="李四">李四</option>
-                <option value="王五">王五</option>
-                <option value="赵六">赵六</option>
-                <option value="钱七">钱七</option>
-              </select>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">附件</label>
-              <div class="upload-area-sm">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="17 8 12 3 7 8"/>
-                  <line x1="12" y1="3" x2="12" y2="15"/>
-                </svg>
-                <span>上传附件</span>
+              <div class="field-shell select-shell">
+                <select class="form-select polished-select" v-model="newRequirement.owner">
+                  <option value="">请选择负责人</option>
+                  <option v-for="u in allUsers" :key="u.id" :value="u.realName">{{ u.realName }}</option>
+                </select>
               </div>
             </div>
+
           </div>
         </div>
         <div class="modal-footer">
@@ -1003,14 +1333,14 @@ const getStatusBadgeClass = (status: string) => {
                 <div class="detail-value">{{ currentRequirement?.source || '内部' }}</div>
               </div>
               <div class="detail-item">
-                <label>提出人</label>
-                <div class="detail-value">{{ currentRequirement?.requester || '-' }}</div>
+                <label>提出人 / 联系人</label>
+                <div class="detail-value">{{ currentRequirement?.requester || currentRequirement?.owner || '-' }}</div>
               </div>
             </div>
             <div class="detail-row two-cols">
               <div class="detail-item">
                 <label>负责人</label>
-                <div class="detail-value">{{ currentRequirement?.owner }}</div>
+                <div class="detail-value">{{ currentRequirement?.owner || '-' }}</div>
               </div>
               <div class="detail-item">
                 <label>期望上线</label>
@@ -1155,6 +1485,13 @@ const getStatusBadgeClass = (status: string) => {
         </div>
       </div>
     </div>
+
+    <RequirementDesignPlannerDialog
+      v-model="showDesignPlanner"
+      :users="allUsers"
+      :plans="plannerPlans"
+      @save="saveDesignPlanner"
+    />
   </div>
 </template>
 
@@ -1628,6 +1965,48 @@ const getStatusBadgeClass = (status: string) => {
   background: var(--gray-50);
 }
 
+.row-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mini-link,
+.row-action-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mini-link {
+  background: var(--gray-100);
+  color: var(--gray-700);
+}
+
+.row-action-btn.primary {
+  background: rgba(79, 70, 229, 0.12);
+  color: var(--primary);
+}
+
+.row-action-btn.secondary {
+  background: var(--gray-100);
+  color: var(--gray-700);
+}
+
+.row-action-btn.danger {
+  background: rgba(220, 38, 38, 0.12);
+  color: var(--danger);
+}
+
+.mini-link:disabled,
+.row-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .req-no {
   font-size: 12px;
   color: var(--gray-400);
@@ -1805,7 +2184,7 @@ const getStatusBadgeClass = (status: string) => {
 
 .modal.create-modal {
   width: 900px;
-  height: 700px;
+  height: min(760px, 88vh);
 }
 
 .modal-header {
@@ -1847,7 +2226,8 @@ const getStatusBadgeClass = (status: string) => {
   display: flex;
   gap: 20px;
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
+  align-items: stretch;
 }
 
 .form-left {
@@ -1855,10 +2235,11 @@ const getStatusBadgeClass = (status: string) => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 .form-right {
-  width: 220px;
+  width: 240px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1908,6 +2289,60 @@ const getStatusBadgeClass = (status: string) => {
 .form-textarea {
   resize: vertical;
   min-height: 80px;
+}
+
+.polished-input {
+  height: 44px;
+  border-radius: 14px;
+  border-color: rgba(148, 163, 184, 0.22);
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.field-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  border-radius: 15px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+}
+
+.field-shell::after {
+  content: '';
+  position: absolute;
+  right: 14px;
+  width: 16px;
+  height: 16px;
+  opacity: 0.55;
+  pointer-events: none;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.select-shell::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='1.8'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+
+.date-shell::after {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='1.8'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cline x1='16' y1='2' x2='16' y2='6'/%3E%3Cline x1='8' y1='2' x2='8' y2='6'/%3E%3Cline x1='3' y1='10' x2='21' y2='10'/%3E%3C/svg%3E");
+}
+
+.spotlight-group {
+  padding: 12px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(79, 70, 229, 0.08), rgba(79, 70, 229, 0.02));
+  border: 1px solid rgba(99, 102, 241, 0.12);
+}
+
+.form-tip {
+  display: block;
+  font-size: 12px;
+  color: var(--warning, #b45309);
+  margin-top: 6px;
 }
 
 .radio-group {
@@ -2540,10 +2975,18 @@ const getStatusBadgeClass = (status: string) => {
   border: 1.5px solid var(--gray-200);
   border-radius: var(--radius-md);
   overflow: hidden;
-  min-height: 120px;
-  max-height: 180px;
+  flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 280px;
+  background: #fff;
+}
+
+.form-left .form-group:last-child {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .editor-toolbar {
@@ -2576,16 +3019,31 @@ const getStatusBadgeClass = (status: string) => {
 
 .editor-content {
   flex: 1;
-  padding: 10px;
+  min-height: 220px;
+  max-height: 320px;
+  padding: 12px 14px;
   font-size: 13px;
   line-height: 1.6;
   overflow-y: auto;
   outline: none;
+  overflow-wrap: anywhere;
 }
 
 .editor-content:empty:before {
   content: '请输入需求描述...';
   color: var(--gray-400);
+}
+
+.editor-content :deep(img) {
+  display: block;
+  max-width: 100%;
+  width: auto !important;
+  height: auto !important;
+  max-height: 220px;
+  margin: 12px 0;
+  border-radius: 12px;
+  object-fit: contain;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
 }
 
 /* 小上传区域 */
@@ -2621,18 +3079,51 @@ const getStatusBadgeClass = (status: string) => {
 /* 下拉选择框 */
 .form-select {
   width: 100%;
-  height: 38px;
-  padding: 0 12px;
-  border: 1px solid var(--gray-200);
-  border-radius: var(--radius-sm);
-  font-size: 14px;
+  height: 44px;
+  padding: 0 42px 0 14px;
+  border: none;
+  border-radius: 15px;
+  font-size: 13px;
   color: var(--gray-700);
-  background: white;
+  background: transparent;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
   cursor: pointer;
   outline: none;
 }
 
-.form-select:focus {
-  border-color: var(--primary);
+.form-select,
+.date-input {
+  position: relative;
+  z-index: 1;
+}
+
+.field-shell:focus-within {
+  border-color: rgba(79, 70, 229, 0.28);
+  box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.08), 0 12px 28px rgba(79, 70, 229, 0.12);
+}
+
+.date-input::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  cursor: pointer;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+}
+
+@media (max-width: 1080px) {
+  .modal.create-modal {
+    width: min(960px, 94vw);
+    height: min(860px, 92vh);
+  }
+
+  .modal-body {
+    flex-direction: column;
+  }
+
+  .form-right {
+    width: 100%;
+  }
 }
 </style>

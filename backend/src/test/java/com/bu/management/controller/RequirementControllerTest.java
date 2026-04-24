@@ -2,6 +2,7 @@ package com.bu.management.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.bu.management.dto.RequirementRequest;
+import com.bu.management.dto.RequirementStageActionRequest;
 import com.bu.management.entity.Requirement;
 import com.bu.management.exception.ResourceNotFoundException;
 import com.bu.management.exception.GlobalExceptionHandler;
@@ -73,6 +74,7 @@ class RequirementControllerTest {
 
     private ObjectMapper objectMapper;
     private RequirementRequest validRequest;
+    private RequirementStageActionRequest actionRequest;
     private Requirement existingRequirement;
 
     @BeforeEach
@@ -90,6 +92,9 @@ class RequirementControllerTest {
         validRequest.setPriority("高");
         validRequest.setSource("客户反馈");
         validRequest.setExpectedOnlineDate(LocalDate.now().plusDays(30));
+
+        actionRequest = new RequirementStageActionRequest();
+        actionRequest.setAction("start_eval");
 
         existingRequirement = new Requirement();
         existingRequirement.setId(1L);
@@ -198,6 +203,44 @@ class RequirementControllerTest {
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.code").value(404))
                     .andExpect(jsonPath("$.message").value("需求不存在"));
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /api/requirements/{id}/stage-actions - 阶段动作")
+    class StageActionTests {
+
+        @Test
+        @DisplayName("执行阶段动作成功")
+        @WithMockUser
+        void executeStageAction_success() throws Exception {
+            existingRequirement.setStatus("评估中");
+            when(requirementService.executeStageAction(1L, "start_eval")).thenReturn(existingRequirement);
+
+            mockMvc.perform(post("/api/requirements/1/stage-actions")
+                            .with(csrf())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(actionRequest)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(200))
+                    .andExpect(jsonPath("$.message").value("操作成功"))
+                    .andExpect(jsonPath("$.data.status").value("评估中"));
+        }
+
+        @Test
+        @DisplayName("非法阶段动作返回400")
+        @WithMockUser
+        void executeStageAction_invalidTransition_returns400() throws Exception {
+            when(requirementService.executeStageAction(1L, "start_eval"))
+                    .thenThrow(new RuntimeException("当前状态不允许执行该操作"));
+
+            mockMvc.perform(post("/api/requirements/1/stage-actions")
+                            .with(csrf())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(actionRequest)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value(400))
+                    .andExpect(jsonPath("$.message").value("当前状态不允许执行该操作"));
         }
     }
 

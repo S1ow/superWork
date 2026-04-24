@@ -3,6 +3,7 @@ package com.bu.management.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.bu.management.dto.UserRequest;
+import com.bu.management.mapper.SysUserRoleMapper;
 import com.bu.management.entity.User;
 import com.bu.management.mapper.UserMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.LocalDateTime;
@@ -23,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,6 +41,9 @@ class UserServiceTest {
 
     @Mock
     private PasswordEncoder passwordEncoder;
+
+    @Mock
+    private SysUserRoleMapper sysUserRoleMapper;
 
     @InjectMocks
     private UserService userService;
@@ -260,6 +266,44 @@ class UserServiceTest {
             assertThatThrownBy(() -> userService.getById(99L))
                     .isInstanceOf(RuntimeException.class)
                     .hasMessage("用户不存在");
+        }
+    }
+
+    @Nested
+    @DisplayName("delete 方法测试")
+    class DeleteTests {
+
+        @Test
+        @DisplayName("无业务引用时物理删除用户成功")
+        void delete_withoutReferences_success() {
+            // given
+            when(userMapper.selectById(1L)).thenReturn(existingUser);
+
+            // when
+            boolean deleted = userService.delete(1L);
+
+            // then
+            assertThat(deleted).isTrue();
+            verify(userMapper).deleteById(1L);
+            verify(sysUserRoleMapper).delete(any(LambdaQueryWrapper.class));
+        }
+
+        @Test
+        @DisplayName("存在业务引用时停用用户而不是抛出系统异常")
+        void delete_withReferences_disablesUser() {
+            // given
+            when(userMapper.selectById(1L)).thenReturn(existingUser);
+            doThrow(new DataIntegrityViolationException("FK"))
+                    .when(userMapper).deleteById(1L);
+
+            // when
+            boolean deleted = userService.delete(1L);
+
+            // then
+            assertThat(deleted).isFalse();
+            ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+            verify(userMapper).updateById(captor.capture());
+            assertThat(captor.getValue().getStatus()).isEqualTo(0);
         }
     }
 

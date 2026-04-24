@@ -20,11 +20,11 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class WorkflowConfigService {
 
-    private static final Set<String> PROJECT_STATUSES = Set.of(
+    private static final List<String> PROJECT_STATUSES = List.of(
             "待评估", "评估中", "已拒绝", "转产品需求", "待设计", "设计中",
             "待确认", "开发中", "测试中", "待上线", "已上线", "已交付", "已验收"
     );
-    private static final Set<String> PRODUCT_STATUSES = Set.of(
+    private static final List<String> PRODUCT_STATUSES = List.of(
             "待评估", "评估中", "已拒绝", "待设计", "设计中",
             "待确认", "开发中", "测试中", "待上线", "已上线"
     );
@@ -83,6 +83,13 @@ public class WorkflowConfigService {
         return workflowConfigMapper.selectList(wrapper).stream()
                 .map(WorkflowConfig::getToStatus)
                 .toList();
+    }
+
+    public Map<String, List<String>> getStatusOptions() {
+        return Map.of(
+                "项目需求", PROJECT_STATUSES,
+                "产品需求", PRODUCT_STATUSES
+        );
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -156,7 +163,7 @@ public class WorkflowConfigService {
             throw new RuntimeException("当前状态和目标状态不能相同");
         }
 
-        Set<String> allowedStatuses;
+        List<String> allowedStatuses;
         if ("项目需求".equals(requirementType)) {
             allowedStatuses = PROJECT_STATUSES;
         } else if ("产品需求".equals(requirementType)) {

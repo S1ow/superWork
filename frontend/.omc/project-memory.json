@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1775612832576,
+  "lastScanned": 1775718159541,
   "projectRoot": "/Users/yufeng/Documents/SuperProduct/aiProject/superWork-claude-sp/frontend",
   "techStack": {
     "languages": [
@@ -74,7 +74,7 @@
       "path": "dist",
       "purpose": "Distribution/build output",
       "fileCount": 3,
-      "lastAccessed": 1775612832486,
+      "lastAccessed": 1775718159442,
       "keyFiles": [
         "favicon.svg",
         "icons.svg",
@@ -85,7 +85,7 @@
       "path": "public",
       "purpose": "Public files",
       "fileCount": 2,
-      "lastAccessed": 1775612832487,
+      "lastAccessed": 1775718159442,
       "keyFiles": [
         "favicon.svg",
         "icons.svg"
@@ -95,7 +95,7 @@
       "path": "src",
       "purpose": "Source code",
       "fileCount": 3,
-      "lastAccessed": 1775612832494,
+      "lastAccessed": 1775718159448,
       "keyFiles": [
         "App.vue",
         "main.ts",
@@ -106,14 +106,14 @@
       "path": "test-results",
       "purpose": null,
       "fileCount": 1,
-      "lastAccessed": 1775612832494,
+      "lastAccessed": 1775718159449,
       "keyFiles": []
     },
     "tests": {
       "path": "tests",
       "purpose": "Test files",
       "fileCount": 1,
-      "lastAccessed": 1775612832494,
+      "lastAccessed": 1775718159450,
       "keyFiles": [
         "role-auth.spec.ts"
       ]
@@ -122,18 +122,18 @@
       "path": "dist/assets",
       "purpose": "Static assets",
       "fileCount": 30,
-      "lastAccessed": 1775612832496,
+      "lastAccessed": 1775718159451,
       "keyFiles": [
-        "HomeView-B0tnyxM2.js",
-        "HomeView-DlW31tPp.css",
-        "LoginView-BYpjylSt.css"
+        "HomeView-5aoibmIX.js",
+        "HomeView-B8_2rSZc.css",
+        "LoginView-5CPErDhl.js"
       ]
     },
     "src/assets": {
       "path": "src/assets",
       "purpose": "Static assets",
       "fileCount": 3,
-      "lastAccessed": 1775612832496,
+      "lastAccessed": 1775718159451,
       "keyFiles": [
         "hero.png",
         "vite.svg",
@@ -144,7 +144,7 @@
       "path": "src/components",
       "purpose": "UI components",
       "fileCount": 1,
-      "lastAccessed": 1775612832496,
+      "lastAccessed": 1775718159452,
       "keyFiles": [
         "HelloWorld.vue"
       ]
@@ -153,7 +153,7 @@
       "path": "src/types",
       "purpose": "Type definitions",
       "fileCount": 1,
-      "lastAccessed": 1775612832497,
+      "lastAccessed": 1775718159452,
       "keyFiles": [
         "requirement.ts"
       ]
@@ -162,27 +162,33 @@
   "hotPaths": [
     {
       "path": "src/views/ProjectView.vue",
-      "accessCount": 23,
-      "lastAccessed": 1775616520651,
+      "accessCount": 43,
+      "lastAccessed": 1775718299092,
       "type": "file"
     },
     {
       "path": "src/views/OrganizationView.vue",
-      "accessCount": 13,
-      "lastAccessed": 1775616530807,
+      "accessCount": 23,
+      "lastAccessed": 1775718348386,
       "type": "file"
     },
     {
       "path": "src/views/RequirementsView.vue",
-      "accessCount": 11,
-      "lastAccessed": 1775616429913,
+      "accessCount": 16,
+      "lastAccessed": 1775717084269,
       "type": "file"
     },
     {
       "path": "src/views",
-      "accessCount": 10,
-      "lastAccessed": 1775616457751,
+      "accessCount": 11,
+      "lastAccessed": 1775718591542,
       "type": "directory"
+    },
+    {
+      "path": "src/views/SystemMenuView.vue",
+      "accessCount": 8,
+      "lastAccessed": 1775718532759,
+      "type": "file"
     },
     {
       "path": "src/views/SystemUserView.vue",
@@ -206,12 +212,6 @@
       "path": "src/views/RequirementDetailView.vue",
       "accessCount": 4,
       "lastAccessed": 1775614042372,
-      "type": "file"
-    },
-    {
-      "path": "src/views/SystemMenuView.vue",
-      "accessCount": 3,
-      "lastAccessed": 1775614122501,
       "type": "file"
     },
     {
@@ -254,6 +254,12 @@
       "path": "src/main.ts",
       "accessCount": 1,
       "lastAccessed": 1775616464580,
+      "type": "directory"
+    },
+    {
+      "path": "src/utils/api.ts",
+      "accessCount": 1,
+      "lastAccessed": 1775718187308,
       "type": "directory"
     }
   ],

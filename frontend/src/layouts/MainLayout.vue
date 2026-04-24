@@ -1,22 +1,43 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { api } from '@/utils/api'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
 const isCollapsed = ref(false)
+const requirementBadge = ref<number | null>(null)
 
-const navItems = [
+interface NavItem {
+  path: string
+  icon: string
+  label: string
+  badge?: number
+}
+
+interface NavSection {
+  section: string
+  items: NavItem[]
+}
+
+const navItems: NavSection[] = [
   {
     section: '工作台',
     items: [
       { path: '/', icon: 'HomeFilled', label: '首页' },
-      { path: '/requirements', icon: 'Document', label: '需求管理', badge: 12 },
-      { path: '/tasks', icon: 'Finished', label: '任务管理' },
-      { path: '/projects', icon: 'Folder', label: '项目管理' }
+      { path: '/requirements', icon: 'Document', label: '需求管理' },
+      { path: '/tasks', icon: 'Finished', label: '任务管理' }
+    ]
+  },
+  {
+    section: '基础分类',
+    items: [
+      { path: '/business-lines', icon: 'Collection', label: '业务线管理' },
+      { path: '/projects', icon: 'Folder', label: '项目管理' },
+      { path: '/customers', icon: 'UserFilled', label: '客户信息管理' }
     ]
   },
   {
@@ -28,7 +49,6 @@ const navItems = [
   {
     section: '系统',
     items: [
-      { path: '/organization', icon: 'Organization', label: '组织架构' },
       { path: '/system/users', icon: 'User', label: '用户管理' },
       { path: '/system/roles', icon: 'Lock', label: '角色管理' },
       { path: '/system/menus', icon: 'Menu', label: '菜单管理' },
@@ -46,6 +66,30 @@ const handleLogout = () => {
   authStore.logout()
   router.push('/login')
 }
+
+const loadRequirementBadge = async () => {
+  try {
+    const payload = await api.getRequirements({ page: 1, size: 1 })
+    const total = payload?.total ?? payload?.data?.total
+    if (typeof total === 'number') {
+      requirementBadge.value = total
+      return
+    }
+
+    const records = Array.isArray(payload?.records)
+      ? payload.records
+      : Array.isArray(payload?.data?.records)
+        ? payload.data.records
+        : Array.isArray(payload)
+          ? payload
+          : []
+    requirementBadge.value = records.length
+  } catch {
+    requirementBadge.value = null
+  }
+}
+
+onMounted(loadRequirementBadge)
 </script>
 
 <template>
@@ -88,7 +132,9 @@ const handleLogout = () => {
               <el-icon><component :is="item.icon" /></el-icon>
             </span>
             <span class="nav-item-text">{{ item.label }}</span>
-            <span v-if="item.badge" class="nav-item-badge">{{ item.badge }}</span>
+            <span v-if="item.path === '/requirements' ? requirementBadge !== null : item.badge" class="nav-item-badge">
+              {{ item.path === '/requirements' ? requirementBadge : item.badge }}
+            </span>
           </router-link>
         </div>
       </nav>

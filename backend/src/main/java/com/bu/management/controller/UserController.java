@@ -61,6 +61,16 @@ public class UserController {
     }
 
     /**
+     * 删除用户。存在业务引用时自动停用，保留历史业务数据。
+     */
+    @Operation(summary = "删除用户", description = "删除用户；若存在业务引用则自动停用")
+    @DeleteMapping("/{id}")
+    public Result<Void> delete(@Parameter(description = "用户ID") @PathVariable Long id) {
+        boolean deleted = userService.delete(id);
+        return Result.success(deleted ? "删除成功" : "用户存在关联业务数据，已停用", null);
+    }
+
+    /**
      * 获取用户详情
      */
     @Operation(summary = "获取用户详情", description = "根据ID获取用户详情")

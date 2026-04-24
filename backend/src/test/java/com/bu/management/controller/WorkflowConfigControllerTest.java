@@ -25,6 +25,7 @@ import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -106,6 +107,23 @@ class WorkflowConfigControllerTest {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data[0].id").value(1))
                 .andExpect(jsonPath("$.data[0].requirementType").value("项目需求"));
+    }
+
+    @Test
+    @DisplayName("获取状态选项成功")
+    @WithMockUser
+    void getStatusOptions_success() throws Exception {
+        when(workflowConfigService.getStatusOptions()).thenReturn(Map.of(
+                "项目需求", List.of("待评估", "评估中"),
+                "产品需求", List.of("待设计", "设计中")
+        ));
+
+        mockMvc.perform(get("/api/workflow-configs/meta/status-options"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.项目需求[0]").value("待评估"))
+                .andExpect(jsonPath("$.data.项目需求[1]").value("评估中"))
+                .andExpect(jsonPath("$.data.产品需求[1]").value("设计中"));
     }
 
     @Nested

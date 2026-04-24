@@ -9,6 +9,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: false }
   },
   {
+    path: '/requirements-standalone/:id',
+    name: 'RequirementDetailStandalone',
+    component: () => import('@/views/RequirementDetailView.vue'),
+    meta: { requiresAuth: true, standalone: true }
+  },
+  {
     path: '/',
     component: () => import('@/layouts/MainLayout.vue'),
     meta: { requiresAuth: true },
@@ -28,8 +34,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'requirements/:id',
         name: 'RequirementDetail',
-        component: () => import('@/views/RequirementDetailView.vue'),
-        meta: { title: '需求详情' }
+        redirect: to => `/requirements-standalone/${to.params.id}`
       },
       {
         path: 'tasks',
@@ -50,10 +55,20 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '项目管理' }
       },
       {
+        path: 'business-lines',
+        name: 'BusinessLines',
+        component: () => import('@/views/BusinessLineView.vue'),
+        meta: { title: '业务线管理' }
+      },
+      {
         path: 'organization',
-        name: 'Organization',
-        component: () => import('@/views/OrganizationView.vue'),
-        meta: { title: '组织架构' }
+        redirect: '/business-lines'
+      },
+      {
+        path: 'customers',
+        name: 'Customers',
+        component: () => import('@/views/CustomerInfoView.vue'),
+        meta: { title: '客户信息管理' }
       },
       {
         path: 'system/users',

@@ -129,4 +129,16 @@ class WorkflowConfigServiceTest {
             verify(workflowConfigMapper).deleteById(1L);
         }
     }
+
+    @Test
+    @DisplayName("获取工作流状态选项成功")
+    void getStatusOptions_success() {
+        var options = workflowConfigService.getStatusOptions();
+
+        assertThat(options).containsKeys("项目需求", "产品需求");
+        assertThat(options.get("项目需求"))
+                .containsExactly("待评估", "评估中", "已拒绝", "转产品需求", "待设计", "设计中", "待确认", "开发中", "测试中", "待上线", "已上线", "已交付", "已验收");
+        assertThat(options.get("产品需求"))
+                .containsExactly("待评估", "评估中", "已拒绝", "待设计", "设计中", "待确认", "开发中", "测试中", "待上线", "已上线");
+    }
 }

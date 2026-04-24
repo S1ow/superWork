@@ -12,6 +12,7 @@ interface BusinessLine {
 interface User {
   id: number
   realName: string
+  role?: string
 }
 
 interface ProjectTreeNode {
@@ -29,9 +30,11 @@ interface ProjectTreeNode {
 
 interface Member {
   id: number
+  projectId: number
   userId: number
+  username?: string
+  realName?: string
   role: string
-  user?: User
 }
 
 // State
@@ -40,6 +43,11 @@ const businessLines = ref<BusinessLine[]>([])
 const allUsers = ref<User[]>([])
 const loading = ref(false)
 const dialogMainProjects = ref<ProjectTreeNode[]>([])
+
+// Add-member form state
+const addMemberVisible = ref(false)
+const addMemberLoading = ref(false)
+const addMemberForm = ref({ userId: undefined as number | undefined, role: '' })
 
 // Filters
 const filterBusinessLineId = ref<number | undefined>(undefined)
@@ -113,21 +121,33 @@ const resetFilter = () => {
   loadData()
 }
 
-// Filter tree by name client-side
-const filteredTree = computed(() => {
-  if (!filterName.value.trim()) return treeData.value
-  const keyword = filterName.value.trim().toLowerCase()
-  const filterNodes = (nodes: ProjectTreeNode[]): ProjectTreeNode[] => {
-    return nodes.reduce<ProjectTreeNode[]>((acc, node) => {
-      const matchSelf = node.name.toLowerCase().includes(keyword) || node.code.toLowerCase().includes(keyword)
-      const filteredChildren = filterNodes(node.children ?? [])
-      if (matchSelf || filteredChildren.length > 0) {
-        acc.push({ ...node, children: filteredChildren })
+// 递归统计所有项目（含子项目）数量
+const totalProjectCount = computed(() => {
+  const countAll = (nodes: ProjectTreeNode[]): number =>
+    nodes.reduce((acc, n) => acc + 1 + countAll(n.children ?? []), 0)
+  return countAll(treeData.value)
+})
+
+// 卡片视图：按业务线分组，支持筛选
+const cardGroups = computed(() => {
+  const filterBl = filterBusinessLineId.value
+  const filterN = filterName.value.trim().toLowerCase()
+  return businessLines.value
+    .filter(bl => !filterBl || bl.id === filterBl)
+    .map(bl => {
+      let projects = treeData.value.filter(p => p.businessLineId === bl.id)
+      if (filterN) {
+        projects = projects.filter(p =>
+          p.name.toLowerCase().includes(filterN) ||
+          (p.code || '').toLowerCase().includes(filterN) ||
+          p.children?.some(c =>
+            c.name.toLowerCase().includes(filterN) || (c.code || '').toLowerCase().includes(filterN)
+          )
+        )
       }
-      return acc
-    }, [])
-  }
-  return filterNodes(treeData.value)
+      return { ...bl, projects }
+    })
+    .filter(g => g.projects.length > 0)
 })
 
 const getManagerName = (managerId: number | null | undefined) => {
@@ -139,8 +159,18 @@ const getBusinessLineName = (businessLineId: number) => {
   return businessLines.value.find(bl => bl.id === businessLineId)?.name ?? '—'
 }
 
-const STATUS_TAG: Record<number, 'success' | 'info'> = { 1: 'success', 0: 'info' }
-const STATUS_LABEL: Record<number, string> = { 1: '进行中', 0: '已结束' }
+const projectManagers = computed(() => {
+  return allUsers.value.filter(user => user.role === 'PM')
+})
+
+const STATUS_LABEL: Record<number, string> = { 0: '已结束', 1: '进行中', 2: '待开始', 3: '已交付', 4: '运维中' }
+const STATUS_OPTIONS = [
+  { value: 2, label: '待开始' },
+  { value: 1, label: '进行中' },
+  { value: 3, label: '已交付' },
+  { value: 4, label: '运维中' },
+  { value: 0, label: '已结束' }
+]
 
 // ---- CRUD ----
 const openAdd = async (parentNode?: ProjectTreeNode) => {
@@ -152,7 +182,7 @@ const openAdd = async (parentNode?: ProjectTreeNode) => {
     name: '',
     code: '',
     managerId: undefined,
-    status: 1
+    status: 2
   }
   isEdit.value = false
   dialogVisible.value = true
@@ -219,8 +249,11 @@ const submitProject = async () => {
 
 // ---- Detail Drawer ----
 const openDrawer = async (node: ProjectTreeNode) => {
+  if ((node as any).isBusinessLine) return
   drawerProject.value = node
   drawerVisible.value = true
+  addMemberVisible.value = false
+  addMemberForm.value = { userId: undefined, role: '' }
   drawerMembers.value = []
   drawerLoading.value = true
   try {
@@ -233,23 +266,93 @@ const openDrawer = async (node: ProjectTreeNode) => {
   }
 }
 
+const openAddInBL = async (blId: number) => {
+  projectForm.value = { id: undefined, businessLineId: blId, parentId: null, name: '', code: '', managerId: undefined, status: 1 }
+  isEdit.value = false
+  dialogVisible.value = true
+  await loadDialogProjects(blId)
+}
+
+const loadDrawerMembers = async () => {
+  if (!drawerProject.value) return
+  drawerLoading.value = true
+  try {
+    const members: any = await api.getProjectMembers(drawerProject.value.id)
+    drawerMembers.value = Array.isArray(members) ? members : (members?.data ?? [])
+  } catch (e) {
+    drawerMembers.value = []
+  } finally {
+    drawerLoading.value = false
+  }
+}
+
+const submitAddMember = async () => {
+  if (!addMemberForm.value.userId || !drawerProject.value) return
+  addMemberLoading.value = true
+  try {
+    await api.addProjectMember({
+      projectId: drawerProject.value.id,
+      userId: addMemberForm.value.userId,
+      role: addMemberForm.value.role || undefined
+    })
+    ElMessage.success('添加成功')
+    addMemberVisible.value = false
+    addMemberForm.value = { userId: undefined, role: '' }
+    await loadDrawerMembers()
+  } catch (e) {
+    ElMessage.error('添加失败')
+  } finally {
+    addMemberLoading.value = false
+  }
+}
+
+const handleRemoveMember = async (member: Member) => {
+  if (!drawerProject.value) return
+  try {
+    await ElMessageBox.confirm(`确定移除成员「${member.realName || member.username || '该用户'}」吗？`, '提示', { type: 'warning' })
+    await api.removeProjectMember(drawerProject.value.id, member.userId)
+    ElMessage.success('移除成功')
+    await loadDrawerMembers()
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error('移除失败')
+  }
+}
+
 onMounted(loadData)
 </script>
 
 <template>
   <div class="project-page">
-    <div class="page-header">
-      <div>
+    <!-- 页面标题 + 操作按钮 -->
+    <div class="content-header">
+      <div class="title-with-stats">
         <h2 class="page-title">项目管理</h2>
-        <p class="page-subtitle">查看和管理所有项目及子项目层级结构。</p>
+        <div class="inline-stats">
+          <span class="inline-stat">
+            <span class="stat-num">{{ totalProjectCount }}</span>
+            <span class="stat-text">个项目</span>
+          </span>
+        </div>
       </div>
-      <button class="btn btn-primary" @click="openAdd()">
-        <el-icon><Plus /></el-icon>
-        新增项目
-      </button>
+      <div class="page-actions">
+        <button class="btn btn-default" @click="resetFilter">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="1 4 1 10 7 10"/>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+          重置
+        </button>
+        <button class="btn btn-primary" @click="openAdd()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          新增项目
+        </button>
+      </div>
     </div>
 
-    <!-- Filter Bar -->
+    <!-- 筛选栏 -->
     <div class="filter-section">
       <div class="filter-bar">
         <el-select
@@ -262,72 +365,69 @@ onMounted(loadData)
         >
           <el-option v-for="bl in businessLines" :key="bl.id" :label="bl.name" :value="bl.id" />
         </el-select>
-        <el-input
-          v-model="filterName"
-          placeholder="搜索项目名称或编码"
-          clearable
-          style="width: 220px"
-          @keyup.enter="applyFilter"
-          @clear="resetFilter"
-        >
-          <template #prefix><el-icon><Search /></el-icon></template>
-        </el-input>
-        <el-button @click="applyFilter">搜索</el-button>
-        <el-button @click="resetFilter">重置</el-button>
+        <div class="search-input-wrapper">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            type="text"
+            class="search-input"
+            v-model="filterName"
+            placeholder="搜索项目名称或编码"
+            @keyup.enter="applyFilter"
+          >
+        </div>
+        <button class="btn btn-sm btn-default" @click="applyFilter">搜索</button>
       </div>
     </div>
 
-    <!-- Tree Table -->
-    <div class="table-section">
-      <el-table
-        :data="filteredTree"
-        v-loading="loading"
-        row-key="id"
-        :tree-props="{ children: 'children', hasChildren: 'hasChildren' }"
-        default-expand-all
-        style="width: 100%"
-      >
-        <el-table-column prop="name" label="项目名称" min-width="220">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openDrawer(row)">{{ row.name }}</el-button>
-          </template>
-        </el-table-column>
-        <el-table-column prop="code" label="编码" width="130">
-          <template #default="{ row }">{{ row.code || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="业务线" width="150">
-          <template #default="{ row }">{{ getBusinessLineName(row.businessLineId) }}</template>
-        </el-table-column>
-        <el-table-column label="层级" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.level === 1 ? 'primary' : 'warning'">
-              {{ row.level === 1 ? '主项目' : '子项目' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="项目经理" width="120">
-          <template #default="{ row }">{{ getManagerName(row.managerId) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="STATUS_TAG[row.status] ?? 'info'" size="small">
-              {{ STATUS_LABEL[row.status] ?? '—' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
-          <template #default="{ row }">
-            <el-button
-              v-if="row.level === 1"
-              link
-              type="primary"
-              @click="openAdd(row)"
-            >新增子项目</el-button>
-            <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+    <!-- 卡片视图：按业务线分组 -->
+    <div class="project-content" v-loading="loading">
+      <el-empty v-if="!loading && cardGroups.length === 0" description="暂无项目" style="padding: 60px 0" />
+      <div v-for="group in cardGroups" :key="group.id" class="bl-section">
+        <div class="bl-header">
+          <div class="bl-header-left">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            <span class="bl-title">{{ group.name }}</span>
+            <span class="bl-badge">{{ group.projects.length }} 个项目</span>
+          </div>
+          <span class="card-action primary" @click="openAddInBL(group.id)">+ 新增项目</span>
+        </div>
+        <div class="project-card-grid">
+          <div v-for="proj in group.projects" :key="proj.id" class="project-card">
+            <div class="card-top" @click="openDrawer(proj)">
+              <div class="card-name-row">
+                <span class="card-name">{{ proj.name }}</span>
+                <span :class="['card-status-badge', `status-${proj.status}`]">
+                  {{ STATUS_LABEL[proj.status] ?? '—' }}
+                </span>
+              </div>
+              <div class="card-meta-row">
+                <span class="card-meta-item">
+                  <span class="card-meta-label">编码</span>
+                  <code class="card-code">{{ proj.code || '—' }}</code>
+                </span>
+                <span class="card-meta-item">
+                  <span class="card-meta-label">经理</span>
+                  <span class="card-meta-value">{{ getManagerName(proj.managerId) }}</span>
+                </span>
+              </div>
+            </div>
+            <div v-if="proj.children && proj.children.length" class="card-subs">
+              <span class="sub-label">子项目</span>
+              <span v-for="sub in proj.children" :key="sub.id" class="sub-chip" @click.stop="openDrawer(sub)">
+                {{ sub.name }}
+              </span>
+            </div>
+            <div class="card-footer">
+              <span class="card-action primary" @click.stop="openAdd(proj)">+ 子项目</span>
+              <span class="card-action primary" @click.stop="openEdit(proj)">编辑</span>
+              <span class="card-action danger" @click.stop="handleDelete(proj)">删除</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Add/Edit Dialog -->
@@ -371,18 +471,14 @@ onMounted(loadData)
           <el-input v-model="projectForm.code" placeholder="如：PMS" />
         </el-form-item>
         <el-form-item label="项目经理">
-          <el-select v-model="projectForm.managerId" clearable placeholder="请选择" style="width: 100%">
-            <el-option v-for="u in allUsers" :key="u.id" :label="u.realName" :value="u.id" />
+          <el-select v-model="projectForm.managerId" clearable placeholder="请选择项目经理" style="width: 100%">
+            <el-option v-for="u in projectManagers" :key="u.id" :label="u.realName" :value="u.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="状态">
-          <el-switch
-            v-model="projectForm.status"
-            :active-value="1"
-            :inactive-value="0"
-            active-text="进行中"
-            inactive-text="已结束"
-          />
+          <el-select v-model="projectForm.status" style="width: 100%">
+            <el-option v-for="opt in STATUS_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -406,26 +502,67 @@ onMounted(loadData)
           <el-descriptions-item label="层级">{{ drawerProject.level === 1 ? '主项目' : '子项目' }}</el-descriptions-item>
           <el-descriptions-item label="项目经理">{{ getManagerName(drawerProject.managerId) }}</el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag :type="STATUS_TAG[drawerProject.status] ?? 'info'" size="small">
+            <span :class="['status-badge', { green: drawerProject.status === 1, blue: drawerProject.status === 4, orange: drawerProject.status === 2, purple: drawerProject.status === 3, gray: drawerProject.status === 0 }]">
               {{ STATUS_LABEL[drawerProject.status] ?? '—' }}
-            </el-tag>
+            </span>
           </el-descriptions-item>
         </el-descriptions>
 
         <div class="member-section">
-          <h4 class="section-title">项目成员</h4>
+          <div class="section-header">
+            <h4 class="section-title">项目成员</h4>
+            <span v-if="!addMemberVisible" class="action-link primary" style="font-size:13px;cursor:pointer" @click="addMemberVisible = true">+ 添加成员</span>
+            <span v-else class="action-link" style="font-size:13px;cursor:pointer;color:var(--gray-400)" @click="addMemberVisible = false; addMemberForm = { userId: undefined, role: '' }">取消</span>
+          </div>
+
+          <!-- 添加成员表单 -->
+          <div v-if="addMemberVisible" class="add-member-form">
+            <el-select
+              v-model="addMemberForm.userId"
+              placeholder="选择用户"
+              filterable
+              style="flex:1"
+              size="small"
+            >
+              <el-option
+                v-for="u in allUsers.filter(u => !drawerMembers.some(m => m.userId === u.id))"
+                :key="u.id"
+                :label="u.realName"
+                :value="u.id"
+              />
+            </el-select>
+            <el-input
+              v-model="addMemberForm.role"
+              placeholder="角色（选填）"
+              size="small"
+              style="flex:1"
+            />
+            <el-button
+              type="primary"
+              size="small"
+              :loading="addMemberLoading"
+              :disabled="!addMemberForm.userId"
+              @click="submitAddMember"
+            >确定</el-button>
+          </div>
+
           <el-table
             :data="drawerMembers"
             v-loading="drawerLoading"
             size="small"
             border
           >
-            <el-table-column label="成员" prop="userId">
+            <el-table-column label="成员">
               <template #default="{ row }">
-                {{ allUsers.find(u => u.id === row.userId)?.realName ?? `用户${row.userId}` }}
+                {{ row.realName || allUsers.find(u => u.id === row.userId)?.realName || `用户${row.userId}` }}
               </template>
             </el-table-column>
             <el-table-column label="角色" prop="role" />
+            <el-table-column label="操作" width="60" align="center">
+              <template #default="{ row }">
+                <span class="action-link danger" style="font-size:12px;cursor:pointer" @click="handleRemoveMember(row)">移除</span>
+              </template>
+            </el-table-column>
           </el-table>
           <el-empty v-if="!drawerLoading && drawerMembers.length === 0" description="暂无成员" :image-size="60" />
         </div>
@@ -435,12 +572,18 @@ onMounted(loadData)
 </template>
 
 <style scoped>
-.page-header {
+/* ========== 页面头部（与需求管理一致） ========== */
+.content-header {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.title-with-stats {
+  display: flex;
+  align-items: center;
   gap: 16px;
-  margin-bottom: 20px;
 }
 
 .page-title {
@@ -450,18 +593,88 @@ onMounted(loadData)
   margin: 0;
 }
 
-.page-subtitle {
-  margin: 6px 0 0;
+.inline-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 16px;
+  border-left: 1px solid var(--gray-200);
+}
+
+.inline-stat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-num {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gray-800);
+}
+
+.stat-text {
+  font-size: 13px;
   color: var(--gray-500);
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ========== 按钮（与需求管理一致） ========== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+}
+
+.btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark);
+}
+
+.btn-default {
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-200);
+}
+
+.btn-default:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.btn-sm {
+  padding: 6px 12px;
   font-size: 13px;
 }
 
+/* ========== 筛选栏 ========== */
 .filter-section {
-  background: white;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  padding: 16px 20px;
+  background: #FFFFFF;
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
   margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
 }
 
 .filter-bar {
@@ -471,14 +684,314 @@ onMounted(loadData)
   flex-wrap: wrap;
 }
 
-.table-section {
-  background: white;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  padding: 20px;
-  margin-bottom: 16px;
+.search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 
+.search-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--gray-400);
+  pointer-events: none;
+}
+
+.search-input {
+  height: 32px;
+  padding: 0 12px 0 32px;
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  outline: none;
+  width: 220px;
+}
+
+.search-input:focus {
+  border-color: var(--primary);
+}
+
+/* ========== 卡片视图 ========== */
+.project-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* 业务线分区 */
+.bl-section {
+  background: #fff;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.bl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.bl-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--gray-600);
+}
+
+.bl-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+
+.bl-badge {
+  font-size: 12px;
+  color: var(--gray-400);
+  background: var(--gray-100);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+/* 项目卡片网格 */
+.project-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+/* 单个项目卡片 */
+.project-card {
+  border: 1px solid var(--gray-100);
+  border-radius: var(--radius-md);
+  background: #fff;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.project-card:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  border-color: var(--primary-light, #e0e7ff);
+}
+
+.card-top {
+  padding: 14px 16px 10px;
+  cursor: pointer;
+  flex: 1;
+}
+
+.card-name-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gray-800);
+  line-height: 1.4;
+}
+
+.card-status-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.card-status-badge.status-1 { background: #d1fae5; color: #047857; }
+.card-status-badge.status-0 { background: var(--gray-100); color: var(--gray-500); }
+.card-status-badge.status-2 { background: #fef3c7; color: #92400e; }
+.card-status-badge.status-3 { background: #ede9fe; color: #5b21b6; }
+.card-status-badge.status-4 { background: #dbeafe; color: #1d4ed8; }
+
+.card-meta-row {
+  display: flex;
+  gap: 16px;
+}
+
+.card-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-meta-label {
+  font-size: 11px;
+  color: var(--gray-400);
+}
+
+.card-code {
+  font-size: 11px;
+  color: var(--gray-500);
+  background: var(--gray-100);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
+.card-meta-value {
+  font-size: 12px;
+  color: var(--gray-600);
+}
+
+/* 子项目区域 */
+.card-subs {
+  padding: 0 16px 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sub-label {
+  font-size: 11px;
+  color: var(--gray-400);
+  flex-shrink: 0;
+}
+
+.sub-chip {
+  font-size: 11px;
+  color: var(--primary);
+  background: var(--primary-light, #eef2ff);
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.sub-chip:hover {
+  background: #dbeafe;
+}
+
+/* 卡片底部操作 */
+.card-footer {
+  padding: 8px 16px;
+  border-top: 1px solid var(--gray-50);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.card-action {
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.card-action:hover { opacity: 0.75; }
+.card-action.primary { color: var(--primary); }
+.card-action.danger  { color: var(--danger, #dc2626); }
+
+/* 项目名称链接 */
+.project-name-link {
+  color: var(--primary);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.project-name-link:hover {
+  color: var(--primary-dark);
+}
+
+/* 编码文本 */
+.code-text {
+  font-size: 12px;
+  color: var(--gray-400);
+  font-family: monospace;
+}
+
+/* 项目标签 */
+.project-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+/* 状态角标 */
+.status-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.status-badge.gray { background: var(--gray-100); color: var(--gray-600); }
+.status-badge.blue { background: #dbeafe; color: #1d4ed8; }
+.status-badge.yellow { background: #fef3c7; color: #b45309; }
+.status-badge.orange { background: #fef3c7; color: #92400e; }
+.status-badge.purple { background: #ede9fe; color: #5b21b6; }
+.status-badge.green { background: #d1fae5; color: #047857; }
+.status-badge.red { background: #fee2e2; color: #dc2626; }
+.status-badge.purple { background: #e9d5ff; color: #7c3aed; }
+
+/* 操作链接 */
+.action-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.action-link {
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.action-link:hover {
+  opacity: 0.8;
+}
+
+.action-link.primary {
+  color: var(--primary);
+}
+
+.action-link.danger {
+  color: var(--danger);
+}
+
+/* ========== 操作链接不换行 ========== */
+.action-links {
+  white-space: nowrap;
+}
+
+/* ========== 业务线行样式 ========== */
+.project-table :deep(.bl-row) {
+  background: var(--gray-50) !important;
+}
+
+.project-table :deep(.bl-row td) {
+  background: var(--gray-50) !important;
+  border-bottom: 1px solid var(--gray-200) !important;
+}
+
+.bl-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-700);
+}
+
+/* ========== 详情抽屉 ========== */
 .detail-desc {
   margin-bottom: 24px;
 }
@@ -487,10 +1000,27 @@ onMounted(loadData)
   margin-top: 8px;
 }
 
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
 .section-title {
   font-size: 14px;
   font-weight: 600;
   color: var(--gray-700);
-  margin: 0 0 12px;
+  margin: 0;
+}
+
+.add-member-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  background: var(--gray-50);
+  border-radius: var(--radius-sm);
 }
 </style>
